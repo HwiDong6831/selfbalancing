@@ -38,3 +38,5 @@ FOC 드라이버: SimpleFOC Mini
 자기인코더: MT6701
 
 모터: 2804-100KV 브러시리스
+
+![image](./docs/frame/frame.png)
