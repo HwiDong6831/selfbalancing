@@ -1,56 +1,44 @@
+/*
+ * main.c — Step 1: BLDC 오픈루프 회전 테스트 (배선/드라이버 검증용)
+ *
+ * 주의: 오픈루프는 발열 큼 (회전자 위치 무시하고 전압 강제 인가).
+ * 짧게만 전원 넣고 확인할 것. 검증 끝나면 클로즈드루프 FOC 로.
+ *
+ * (MPU 센싱 로직은 components/mpu6050 에 그대로 있음. 복원하려면
+ *  이전 app_main 의 i2c 버스 생성 + mpu6050_init/read 루프 사용.)
+ */
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 #include "esp_log.h"
-#include "driver/i2c_master.h"
 
-#include "mpu6050.h"
-
-#define I2C_PORT            I2C_NUM_0
-#define PIN_SDA             16
-#define PIN_SCL             17
-#define SENSOR_PERIOD_MS    10
-
-// 사용할 mux 채널 (이 로봇 전용 배선 → main 에 둠)
-static const int channels[3] = {0, 1, 6};
+#include "foc.h"
 
 void app_main(void)
 {
-    // I2C 버스 생성
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = I2C_PORT,
-        .sda_io_num = PIN_SDA,
-        .scl_io_num = PIN_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    i2c_master_bus_handle_t bus;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &bus));
+    foc_init();
+    foc_enable(true);
 
-    // MPU 초기화
-    ESP_ERROR_CHECK(mpu6050_init(bus, channels, 3));
+    const float target_vel = 10.0f;    // 최종 목표 축 속도 [rad/s] (~1.6 rev/s)
+    const float accel = 5.0f;          // 가속도 [rad/s^2] → 0에서 목표까지 2초
+    float vel = 0.0f;                  // 현재 속도 (0에서 램프업)
+    int64_t last = esp_timer_get_time();
 
-    // 각 채널 순회하며 가속도 읽고, 200ms 마다 평균 출력
-    int16_t ax[3] = {0}, ay[3] = {0}, az[3] = {0};
-    TickType_t last = xTaskGetTickCount();
+    ESP_LOGI("FOC", "오픈루프 회전 시작 (발열 주의, 짧게)");
 
     while (1) {
-        for (int i = 0; i < 3; i++) {
-            esp_err_t err = mpu6050_read_accel(channels[i], &ax[i], &ay[i], &az[i]);
-            if (err != ESP_OK) {
-                ESP_LOGE("MPU", "[채널 %d] 값 읽기 실패", channels[i]);
-            }
-        }
+        // 실제 경과 시간으로 dt 계산 (루프 주기와 무관하게 전기각 정확히 적분)
+        int64_t now = esp_timer_get_time();
+        float dt = (now - last) / 1000000.0f;   // us → s
+        last = now;
 
-        if (xTaskGetTickCount() - last > pdMS_TO_TICKS(200)) {
-            ESP_LOGI("MPU", "X: %6d  Y: %6d  Z: %6d",
-                     (ax[0] + ax[1] + ax[2]) / 3,
-                     (ay[0] + ay[1] + ay[2]) / 3,
-                     (az[0] + az[1] + az[2]) / 3);
-            last = xTaskGetTickCount();
-        }
+        // 목표 속도까지 서서히 램프업 (오픈루프 락 유지)
+        vel += accel * dt;
+        if (vel > target_vel) vel = target_vel;
 
-        vTaskDelay(pdMS_TO_TICKS(SENSOR_PERIOD_MS));      // 센싱 주기
+        foc_openloop_velocity(vel, dt);
+
+        vTaskDelay(1);
     }
 }
