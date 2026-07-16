@@ -2,24 +2,33 @@
 #include <math.h>
 #include "driver/ledc.h"
 #include "driver/gpio.h"
+#include "esp_log.h"
+
 
 #define PIN_EN          5
 #define PIN_IN1         18
 #define PIN_IN2         19
 #define PIN_IN3         23
 
-// --- PWM 설정 ---
+// PWM 설정
 #define PWM_FREQ_HZ     22000                   // 가청주파수 위로 설정해서 모터에서 소리 안나게 함
 #define PWM_RES         LEDC_TIMER_11_BIT       // pwm 주파수를 뽑으려면 11비트가 최대
 #define DUTY_MAX        2047                    // 11비트
 #define PWM_MODE        LEDC_LOW_SPEED_MODE
 #define PWM_TIMER       LEDC_TIMER_0
 
-// --- 전압 ---
-#define V_SUPPLY        11.3f                 // VM 실측
-#define POLE_PAIRS      7                     // 2804 모터 (임시)
+// 전압
+#define V_SUPPLY        11.3f                   // VM 실측
+#define POLE_PAIRS      7                       // 2804 모터 (임시)
+
+
+// PID
+#define PID_KP          0.1f                    // 오차 반영 계수
+#define PID_KI          0.0f                    // 
+#define PID_KD          0.0f                    // 
 
 static const int ch_gpio[3] = {PIN_IN1, PIN_IN2, PIN_IN3};
+
 
 static float clampf(float x, float lo, float hi)
 {
@@ -45,6 +54,8 @@ void foc_init(void)
     };
     ESP_ERROR_CHECK(gpio_config(&foc_cfg));
     ESP_ERROR_CHECK(gpio_set_level(PIN_EN, 0)); // PWM 설정이 완료되기 전까지 꺼둠(모터 오작동 방지)
+    
+    ESP_LOGI("FOC", "EN핀 설정 완료");
 
     // LEDC 타이머 설정
     ledc_timer_config_t ledc_cfg = {
@@ -55,6 +66,7 @@ void foc_init(void)
         .clk_cfg = LEDC_AUTO_CLK
     };
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_cfg));
+    ESP_LOGI("FOC", "LEDC 타이머 설정 완료");
 
 
     // 3상 채널 등록
@@ -68,7 +80,9 @@ void foc_init(void)
             .hpoint = 0
         };
         ESP_ERROR_CHECK(ledc_channel_config(&ch_cfg));
+        ESP_LOGI("FOC", "3상 %d번 채널 등록 완료", i);
     }
+    ESP_LOGI("FOC", "3상 채널 등록 완료");
 }
 
 
@@ -83,6 +97,11 @@ void foc_enable(bool on)
     } else {
         gpio_set_level(PIN_EN, 1);
     }
+}
+
+
+float foc_align(float align_angle){
+    return align_angle * POLE_PAIRS;
 }
 
 // 
@@ -109,10 +128,6 @@ void foc_set_phase_voltage(float ud, float uq, float angle_el)
     }
 }
 
-
-// ============================================================
-//  오픈루프 속도 제어 (인코더 없이 강제 회전)
-// ============================================================
 float foc_openloop_velocity(float target_vel, float dt)
 {
     // 전기각을 함수 밖에서도 유지해야 하므로 static 변수 사용
@@ -121,8 +136,38 @@ float foc_openloop_velocity(float target_vel, float dt)
     // 축속도 → 전기각 적분 (축 1바퀴 = 전기각 POLE_PAIRS 바퀴)
     angle_el = normalize_angle(angle_el + target_vel * POLE_PAIRS * dt);
 
-    // ud=0, uq=2V 고정 인가 (발열 주의)
+    // ud=0, uq=2V
     foc_set_phase_voltage(0.0f, 2.0f, angle_el);
 
     return angle_el;
+}
+
+float foc_closeloop_velocity(float target_vel, float dt, float prev_angle, float now_angle, float angle_offset){
+    // P
+    // 각도 차이 계산(가까운쪽으로)
+    float diff = fmodf(now_angle-prev_angle + (float)M_PI, 2.0f * M_PI);
+    if(diff < 0.0f) diff += 2.0f * M_PI;
+    diff -= (float)M_PI;
+
+    float angle_vel =  diff / dt; 
+    float error = target_vel - angle_vel;
+
+    // I
+    static float integral = 0.0f;
+    integral += error * dt;
+
+    // D
+    static float prev_error = 0.0f;
+    float derivative = (error - prev_error) / dt;
+    prev_error = error;
+
+    // 각 상황에 의도한 전압이 산출되도록 매크로 상수 조정 필요
+    float uq = (PID_KP * error) + (PID_KI * integral) + (PID_KD * derivative);
+
+    // 현재 전기각 계산
+    float angle_el = normalize_angle(now_angle * POLE_PAIRS + angle_offset);
+    // 현재 전기각에 uq 전압 인가
+    foc_set_phase_voltage(0.0f, uq, angle_el);
+
+    return angle_vel;
 }
