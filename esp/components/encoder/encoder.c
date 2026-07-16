@@ -33,7 +33,7 @@ esp_err_t encoder_read_angle(float *angle_rad)
 {
     uint16_t raw = 0;
     encoder_read_raw(&raw);
-    *angle_rad = (float)raw * ((2.0f * M_PI) / 16384);
+    *angle_rad = 360.0f - (float)raw * ((2.0f * M_PI) / 16384); // 모터 전기각 방향이 반대여서 360에서 빼줌
 
     return ESP_OK;
 }
