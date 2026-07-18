@@ -14,7 +14,9 @@
 #include "esp_timer.h"
 
 #include "encoder.h"
+#include "mpu6050.h"
 #include "foc.h"
+#include "balance.h"
 
 #define I2C_PORT    I2C_NUM_0
 #define PIN_SDA     16
@@ -22,7 +24,7 @@
 
 void app_main(void)
 {
-    // I2C 버스 생성 (MT6701 은 메인 버스 직결)
+    // I2C 버스 생성
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = I2C_PORT,
         .sda_io_num = PIN_SDA,
@@ -34,45 +36,66 @@ void app_main(void)
     i2c_master_bus_handle_t bus;
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &bus));
 
+    // MT6701 초기화
     ESP_ERROR_CHECK(encoder_init(bus));
 
+    // MPU6050 초기화
+    const int channels[3] = {0, 1, 6};
+    const int num_channels = 3;
+    ESP_ERROR_CHECK(mpu6050_init(bus, channels, num_channels));
+
+    // FOC 초기화
     foc_init();
     foc_enable(true);
 
-    // while(1){
-    //     foc_openloop_velocity(5, 0.01f);
-    //     vTaskDelay(pdMS_TO_TICKS(10));
-    // }
-
-
-
-    ESP_LOGI("FOC", "foc 초기화 작업 완료");
-
     // 정렬
     foc_set_phase_voltage(0.0f, 2.0f, 0.0f);
-
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     float align_angle = 0.0f;
     encoder_read_angle(&align_angle);
     float angle_offset = foc_align(align_angle);
 
-    ESP_LOGI("FOC", "전기각 정렬 완료(align_angle: %f, offset: %f)", align_angle, angle_offset);
 
-    static float prev_angle = 0.0f;
-    float prev_time = esp_timer_get_time();
+    // 영점설정
+    vTaskDelay(pdMS_TO_TICKS(100));
+    int16_t ax_init, ay_init, az_init;  // 영점
+    mpu6050_read_accel(channels[0], &ax_init, &ay_init, &az_init); // 우선 센서 1개로 동작 시험
+    ESP_LOGI("MAIN", "영점 설정 완료(%d)", ay_init);
 
+    // 루프
+    float prev_angle = 0.0f;
+    encoder_read_angle(&prev_angle);
+    int64_t prev_time = esp_timer_get_time();
+
+    int16_t ax, ay, az;
+    int cnt = 0;
+    vTaskDelay(pdMS_TO_TICKS(10));
     while (1) {
+        int64_t now_time = esp_timer_get_time();
+        float dt = (now_time-prev_time)*1e-6f;
+        // TODO: 루프 도는동안 값이 바뀔 가능성 고려해봐야함
+        mpu6050_read_accel(channels[0], &ax, &ay, &az); // 우선 센서 1개로 동작 시험
+        float target_vel = balance_control(ay, ay_init, dt);
+
         float now_angle;
         if (encoder_read_angle(&now_angle) == ESP_OK) {
-            ESP_LOGI("ENC", "각도: %f deg", now_angle * (180.0f / M_PI));
-            float now_time = esp_timer_get_time();
-            foc_closeloop_velocity(10, (now_time-prev_time)*1e-6f, prev_angle, now_angle, angle_offset);
+            foc_closeloop_velocity(target_vel, dt, prev_angle, now_angle, angle_offset);
             prev_time = now_time;
             prev_angle = now_angle;
         } else {
             ESP_LOGE("ENC", "읽기 실패");
         }
+
+        if(cnt>20){
+            ESP_LOGI("MAIN", "init: %6d   tilt: %6d   target_vel: %6.1f", ay_init, ay, target_vel);
+            // ESP_LOGI("MAIN", "now_angle: %6.1f", now_angle);
+            // ESP_LOGI("MAIN", "ay: %6d", ay);
+            cnt = 0;
+        } else {
+            cnt++;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
