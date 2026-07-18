@@ -10,7 +10,7 @@ esp_err_t encoder_init(i2c_master_bus_handle_t bus)
 {
     i2c_device_config_t encoder_cfg = {
         .device_address = MT6701_ADDR,
-        .scl_speed_hz = 400000,
+        .scl_speed_hz = 100000,
         .dev_addr_length = I2C_ADDR_BIT_LEN_7
     };
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bus, &encoder_cfg, &encoder_dev));
