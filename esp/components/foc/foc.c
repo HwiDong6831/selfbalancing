@@ -23,7 +23,7 @@
 
 
 // PID
-#define PID_KP          0.1f                    // 오차 반영 계수
+#define PID_KP          1.0f                    // 오차 반영 계수
 #define PID_KI          0.0f                    // 
 #define PID_KD          0.0f                    // 
 
@@ -163,11 +163,13 @@ float foc_closeloop_velocity(float target_vel, float dt, float prev_angle, float
 
     // 각 상황에 의도한 전압이 산출되도록 매크로 상수 조정 필요
     float uq = (PID_KP * error) + (PID_KI * integral) + (PID_KD * derivative);
+    uq = clampf(uq, -V_SUPPLY, V_SUPPLY);
 
     // 현재 전기각 계산
     float angle_el = normalize_angle(now_angle * POLE_PAIRS + angle_offset);
     // 현재 전기각에 uq 전압 인가
     foc_set_phase_voltage(0.0f, uq, angle_el);
+    ESP_LOGI("FOC", "uq: %3.1f    angle_el: %6.1f", uq, angle_el);
 
     return angle_vel;
 }
