@@ -8,7 +8,7 @@
 
 
 ### 문제 2. i2c 버스 충돌 문제 
-- 증상: 
+- 증상: mpu6050
 ```
 E (441401) i2c.master: I2C software timeout
 W (441401) i2c.common: GPIO 16 is not usable, maybe conflict with others
