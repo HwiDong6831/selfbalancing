@@ -10,7 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "driver/i2c_master.h"
+#include "driver/i2c.h"
 #include "esp_timer.h"
 
 #include "encoder.h"
@@ -21,28 +21,29 @@
 #define I2C_PORT    I2C_NUM_0
 #define PIN_SDA     16
 #define PIN_SCL     17
+#define I2C_FREQ_HZ 100000
 
 void app_main(void)
 {
-    // I2C 버스 생성
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = I2C_PORT,
+    // I2C 버스 생성 (레거시 드라이버: 버스 stuck 시 CPU 행 없이 타임아웃 반환)
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
         .sda_io_num = PIN_SDA,
         .scl_io_num = PIN_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
+        .sda_pullup_en = true,
+        .scl_pullup_en = true,
+        .master.clk_speed = I2C_FREQ_HZ,
     };
-    i2c_master_bus_handle_t bus;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &bus));
+    ESP_ERROR_CHECK(i2c_param_config(I2C_PORT, &conf));
+    ESP_ERROR_CHECK(i2c_driver_install(I2C_PORT, I2C_MODE_MASTER, 0, 0, 0));
 
     // MT6701 초기화
-    ESP_ERROR_CHECK(encoder_init(bus));
+    ESP_ERROR_CHECK(encoder_init(I2C_PORT));
 
     // MPU6050 초기화
     const int channels[3] = {0, 1, 6};
     const int num_channels = 3;
-    ESP_ERROR_CHECK(mpu6050_init(bus, channels, num_channels));
+    ESP_ERROR_CHECK(mpu6050_init(I2C_PORT, channels, num_channels));
 
     // FOC 초기화
     foc_init();
@@ -50,7 +51,7 @@ void app_main(void)
 
     // 정렬
     foc_set_phase_voltage(0.0f, 2.0f, 0.0f);
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(1000));
 
     float align_angle = 0.0f;
     encoder_read_angle(&align_angle);
@@ -58,7 +59,7 @@ void app_main(void)
 
 
     // 영점설정
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(1000));
     int16_t ax_init, ay_init, az_init;  // 영점
     mpu6050_read_accel(channels[0], &ax_init, &ay_init, &az_init); // 우선 센서 1개로 동작 시험
     ESP_LOGI("MAIN", "영점 설정 완료(%d)", ay_init);

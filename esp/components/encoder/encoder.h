@@ -1,6 +1,6 @@
 #pragma once
 
-#include "driver/i2c_master.h"
+#include "driver/i2c.h"
 #include "esp_err.h"
 #include <math.h>
 
@@ -8,8 +8,8 @@
 extern "C" {
 #endif
 
-// 이미 만들어진 I2C 버스에 MT6701(0x06) 디바이스 등록
-esp_err_t encoder_init(i2c_master_bus_handle_t bus);
+// 레거시 I2C 포트 저장 (MT6701 0x06 은 포트+주소로 직접 접근)
+esp_err_t encoder_init(i2c_port_t port);
 
 // 14bit raw 각도 읽기 (0 ~ 16383)
 esp_err_t encoder_read_raw(uint16_t *raw);

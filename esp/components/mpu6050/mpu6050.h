@@ -1,6 +1,6 @@
 #pragma once
 
-#include "driver/i2c_master.h"
+#include "driver/i2c.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -16,7 +16,7 @@ extern "C" {
  *
  * 반환: ESP_OK. 등록 실패 시 ESP_ERROR_CHECK 로 abort.
  */
-esp_err_t mpu6050_init(i2c_master_bus_handle_t bus, const int *channels, int num_channels);
+esp_err_t mpu6050_init(i2c_port_t port, const int *channels, int num_channels);
 
 /*
  * 지정한 mux 채널의 MPU 가속도 raw 값(16bit) 읽기.
