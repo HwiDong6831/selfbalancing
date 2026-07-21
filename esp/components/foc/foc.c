@@ -169,7 +169,7 @@ float foc_closeloop_velocity(float target_vel, float dt, float prev_angle, float
     float angle_el = normalize_angle(now_angle * POLE_PAIRS + angle_offset);
     // 현재 전기각에 uq 전압 인가
     foc_set_phase_voltage(0.0f, uq, angle_el);
-    ESP_LOGI("FOC", "uq: %3.1f    angle_el: %6.1f", uq, angle_el);
+    // ESP_LOGI("FOC", "uq: %3.1f    angle_el: %6.1f", uq, angle_el);
 
     return angle_vel;
 }
