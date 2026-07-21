@@ -85,3 +85,32 @@ esp_err_t mpu6050_read_accel(int channel, int16_t *ax, int16_t *ay, int16_t *az)
     *az = (int16_t)(raw[4] << 8 | raw[5]);
     return ESP_OK;
 }
+
+esp_err_t mpu6050_read_accel_gyro(int channel,
+                                  int16_t *ax, int16_t *ay, int16_t *az,
+                                  int16_t *gx, int16_t *gy, int16_t *gz)
+{
+    // mux 채널 선택
+    esp_err_t err = mux_select(channel);
+    if (err != ESP_OK) return err;         // 실패 시 출력 안 건드림 → 호출부가 이전 값 유지
+
+    // 채널 전환 직후 다운스트림 버스가 안정될 때까지 대기
+    esp_rom_delay_us(MUX_SETTLE_US);
+
+    // ACCEL_XOUT_H 부터 14바이트 버스트: accel(6) + temp(2) + gyro(6).
+    // 한 트랜잭션으로 읽어 같은 시점의 accel/gyro 확보.
+    uint8_t raw[14] = {0};
+    uint8_t reg = REG_ACCEL_XOUT;
+    err = i2c_master_write_read_device(s_port, MPU_ADDR, &reg, 1, raw, 14,
+                                       pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+    if (err != ESP_OK) return err;         // 실패 시 출력 안 건드림 → 호출부가 이전 값 유지
+
+    *ax = (int16_t)(raw[0]  << 8 | raw[1]);
+    *ay = (int16_t)(raw[2]  << 8 | raw[3]);
+    *az = (int16_t)(raw[4]  << 8 | raw[5]);
+    // raw[6..7] = 온도 (사용 안 함)
+    *gx = (int16_t)(raw[8]  << 8 | raw[9]);
+    *gy = (int16_t)(raw[10] << 8 | raw[11]);
+    *gz = (int16_t)(raw[12] << 8 | raw[13]);
+    return ESP_OK;
+}

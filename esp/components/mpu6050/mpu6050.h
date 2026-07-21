@@ -28,6 +28,18 @@ esp_err_t mpu6050_init(i2c_port_t port, const int *channels, int num_channels);
  */
 esp_err_t mpu6050_read_accel(int channel, int16_t *ax, int16_t *ay, int16_t *az);
 
+/*
+ * 가속도 + 자이로 3축 동시 읽기 (14바이트 버스트).
+ *
+ * ax,ay,az : 가속도 raw (기본 ±2g = 16384 LSB/g)
+ * gx,gy,gz : 자이로 raw (기본 ±250°/s = 131 LSB/(°/s))
+ *
+ * 반환: 성공 ESP_OK, 실패 시 I2C 에러 코드 (실패 시 출력 미변경 → 이전값 유지).
+ */
+esp_err_t mpu6050_read_accel_gyro(int channel,
+                                  int16_t *ax, int16_t *ay, int16_t *az,
+                                  int16_t *gx, int16_t *gy, int16_t *gz);
+
 #ifdef __cplusplus
 }
 #endif
