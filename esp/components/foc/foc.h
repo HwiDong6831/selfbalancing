@@ -26,11 +26,14 @@ void foc_set_phase_voltage(float ud, float uq, float angle_el);
 // 반환: 현재 전기각 [rad]
 float foc_openloop_velocity(float target_vel, float dt);
 
-// 클로즈루프 속도 제어.
-// target_vel : 목표 회전 속도 [축 기준 rad/s]
-// dt         : 지난 호출 이후 경과 시간 [s]
-// angle_rad  : 현재 기계각 [rad]
-float foc_closeloop_velocity(float target_vel, float dt, float prev_angle, float now_angle, float angle_offset);
+// [보존] 클로즈루프 속도 제어. 토크모드로 대체되어 미사용.
+// float foc_closeloop_velocity(float target_vel, float dt, float prev_angle, float now_angle, float angle_offset);
+
+// 토크 인가 (속도 PID 우회). 밸런싱 상태피드백용.
+// uq          : q축 전압 (토크). 내부에서 ±V_SUPPLY 클램프.
+// now_angle   : 현재 기계각 [rad] (인코더)
+// angle_offset: 정렬 오프셋
+void foc_apply_torque(float uq, float now_angle, float angle_offset);
 
 #ifdef __cplusplus
 }

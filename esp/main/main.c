@@ -49,8 +49,8 @@ void app_main(void)
     foc_init();
     foc_enable(true);
 
-    // 정렬
-    foc_set_phase_voltage(0.0f, 2.0f, 0.0f);
+    // 정렬 (d축에 전압 인가 → 회전자를 전기각 0°에 고정)
+    foc_set_phase_voltage(2.0f, 0.0f, 0.0f);
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     float align_angle = 0.0f;
@@ -95,30 +95,31 @@ void app_main(void)
         int64_t now_time = esp_timer_get_time();
         float dt = (now_time-prev_time)*1e-6f;
         // TODO: 루프 도는동안 값이 바뀔 가능성 고려해봐야함
-        mpu6050_read_accel_gyro(channels[0], &ax, &ay, &az, &gx, &gy, &gz); // 우선 센서 1개로 동작 시험
-        float target_vel = balance_control(ay, ay_init, dt);
+        mpu6050_read_accel_gyro(channels[0], &ax, &ay, &az, &gx, &gy, &gz);
+        // float target_vel = balance_control(ay, ay_init, dt);   // [보존] 속도모드
 
-        // [검증] 상보필터 각도 추정 (아직 제어엔 미사용, 로그로만 확인)
+        // 상보필터 각도 추정 → 토크모드 제어
         float rate;
         float angle = balance_estimate_angle(ay, az, gx, gx_bias, dt, &rate);
+        float uq = balance_torque(angle, rate);
 
         float now_angle;
         if (encoder_read_angle(&now_angle) == ESP_OK) {
-            foc_closeloop_velocity(target_vel, dt, prev_angle, now_angle, angle_offset);
+            // foc_closeloop_velocity(target_vel, dt, prev_angle, now_angle, angle_offset); // [보존]
+            foc_apply_torque(uq, now_angle, angle_offset);
             prev_time = now_time;
             prev_angle = now_angle;
         } else {
             ESP_LOGE("ENC", "읽기 실패");
         }
 
-        if(cnt>20){
-            // [검증] 상보필터: 정지 시 안정·무드리프트, 기울이면 즉시 추종하는지 확인
-            ESP_LOGI("MAIN", "angle: %7.2f deg  rate: %8.2f dps  (ay:%6d gx:%6d)", angle, rate, ay, gx);
+        if(cnt>200){
+            ESP_LOGI("MAIN", "angle: %7.2f  rate: %8.2f  uq: %5.2f", angle, rate, uq);
             cnt = 0;
         } else {
             cnt++;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(1));   // 빠른 커뮤테이션 (진동 개선)
     }
 }

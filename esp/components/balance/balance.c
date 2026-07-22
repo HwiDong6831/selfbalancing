@@ -2,13 +2,35 @@
 #include <math.h>
 #include <stdbool.h>
 
-// PID
+// PID (구 속도모드용, 보존)
 #define PID_KP          0.2f                    // 오차 반영 계수
 #define PID_KD          0.0f                    //
 
 // 상보필터
 #define GYRO_LSB_PER_DPS  131.0f                // 자이로 기본 ±250°/s
 #define COMP_ALPHA        0.98f                 // 자이로 비중 (나머지는 가속도로 드리프트 보정)
+
+// 토크모드 상태피드백
+#define BAL_K1          -0.5f                   // angle 게인 [V/deg] (부호: 실기 확인해 반대라 음수)
+#define BAL_K2          0.0f                    // rate 게인 [V/(deg/s)] (부호 확인 후 추가, K1과 같은 부호계열)
+#define UQ_LIMIT        4.0f                    // uq 클램프 [V]
+#define TILT_CUTOFF     35.0f                   // |angle| 초과 시 정지 [deg]
+
+static float clampf(float x, float lo, float hi)
+{
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
+
+// uq = K1·angle + K2·rate. angle=0 이 목표(똑바로).
+// 부호가 반대면 즉시 넘어짐 → BAL_K1/K2 부호 뒤집기.
+float balance_torque(float angle, float rate)
+{
+    if (fabsf(angle) > TILT_CUTOFF) return 0.0f;   // 넘어짐 → 모터 정지
+    float uq = BAL_K1 * angle + BAL_K2 * rate;
+    return clampf(uq, -UQ_LIMIT, UQ_LIMIT);
+}
 
 float balance_estimate_angle(int16_t ay, int16_t az, int16_t gx,
                              float gx_bias, float dt, float *rate_out)
@@ -34,6 +56,8 @@ float balance_estimate_angle(int16_t ay, int16_t az, int16_t gx,
 }
 
 
+// [보존] 속도모드 밸런싱 제어. 토크모드로 대체되어 미사용.
+#if 0
 float balance_control(int16_t angle, int16_t balance_zero_angle, float dt){
     float error = (float)(balance_zero_angle - angle);
 
@@ -44,3 +68,4 @@ float balance_control(int16_t angle, int16_t balance_zero_angle, float dt){
     float target_vel = (PID_KP*error + PID_KD*d) / 150 ;
     return target_vel;
 }
+#endif

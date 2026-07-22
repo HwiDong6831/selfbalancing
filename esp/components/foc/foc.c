@@ -101,7 +101,8 @@ void foc_enable(bool on)
 
 
 float foc_align(float align_angle){
-    return align_angle * POLE_PAIRS;
+    // d축 정렬 시 회전자 전기각 0°. angle_el = PP·(now_angle - align_angle) 되도록 음수 offset.
+    return -align_angle * POLE_PAIRS;
 }
 
 // 
@@ -142,6 +143,8 @@ float foc_openloop_velocity(float target_vel, float dt)
     return angle_el;
 }
 
+// [보존] 클로즈루프 속도 제어. 토크모드(foc_apply_torque)로 대체되어 미사용.
+#if 0
 float foc_closeloop_velocity(float target_vel, float dt, float prev_angle, float now_angle, float angle_offset){
     // P
     // 각도 차이 계산(가까운쪽으로)
@@ -172,4 +175,13 @@ float foc_closeloop_velocity(float target_vel, float dt, float prev_angle, float
     // ESP_LOGI("FOC", "uq: %3.1f    angle_el: %6.1f", uq, angle_el);
 
     return angle_vel;
+}
+#endif
+
+// 토크 인가: uq 를 현재 전기각에 직접 인가 (속도 PID 없음).
+void foc_apply_torque(float uq, float now_angle, float angle_offset)
+{
+    uq = clampf(uq, -V_SUPPLY, V_SUPPLY);       // 하드 안전 클램프
+    float angle_el = normalize_angle(now_angle * POLE_PAIRS + angle_offset);
+    foc_set_phase_voltage(0.0f, uq, angle_el);
 }
