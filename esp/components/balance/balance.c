@@ -11,10 +11,11 @@
 #define COMP_ALPHA        0.98f                 // 자이로 비중 (나머지는 가속도로 드리프트 보정)
 
 // 토크모드 상태피드백
-#define BAL_K1          -0.5f                   // angle 게인 [V/deg] (부호: 실기 확인해 반대라 음수)
-#define BAL_K2          0.0f                    // rate 게인 [V/(deg/s)] (부호 확인 후 추가, K1과 같은 부호계열)
-#define UQ_LIMIT        4.0f                    // uq 클램프 [V]
+#define BAL_K1          -2.0f                   // angle 게인 [V/deg] (부호: 실기 확인해 반대라 음수)
+#define BAL_K2          -0.4f                    // rate 게인 [V/(deg/s)] (부호 확인 후 추가, K1과 같은 부호계열)
+#define UQ_LIMIT        11.0f                    // uq 클램프 [V]
 #define TILT_CUTOFF     35.0f                   // |angle| 초과 시 정지 [deg]
+#define DEADBAND        1.0f                    // |error| < 이 값이면 각도항 무시 [deg]
 
 static float clampf(float x, float lo, float hi)
 {
@@ -28,7 +29,11 @@ static float clampf(float x, float lo, float hi)
 float balance_torque(float angle, float rate)
 {
     if (fabsf(angle) > TILT_CUTOFF) return 0.0f;   // 넘어짐 → 모터 정지
-    float uq = BAL_K1 * angle + BAL_K2 * rate;
+
+    // ±DEADBAND 안에서는 각도항 무시(미세 진동 억제). 밖이면 full 인가(경계 넘으면 확).
+    // 각속도항은 항상 유지 → 초기 낙하 감지·댐핑.
+    float pos = (fabsf(angle) < DEADBAND) ? 0.0f : angle;
+    float uq = BAL_K1 * pos + BAL_K2 * rate;
     return clampf(uq, -UQ_LIMIT, UQ_LIMIT);
 }
 

@@ -58,12 +58,6 @@ void app_main(void)
     float angle_offset = foc_align(align_angle);
 
 
-    // 영점설정
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    int16_t ax_init, ay_init, az_init;  // 영점
-    mpu6050_read_accel(channels[0], &ax_init, &ay_init, &az_init); // 우선 센서 1개로 동작 시험
-    ESP_LOGI("MAIN", "영점 설정 완료(%d)", ay_init);
-
     // 자이로 gx bias 측정
     float gx_bias = 0.0f;
     {
@@ -82,44 +76,61 @@ void app_main(void)
         ESP_LOGI("MAIN", "gx_bias = %.1f (n=%d)", gx_bias, n_ok);
     }
 
+    // 밸런스 setpoint 캘리브레이션:
+    // 로봇을 밸런스 자세로 잡은 채 ~2초간 상보필터를 수렴시켜, 그 각도를 기준(0)으로.
+    float balance_setpoint = 0.0f;
+    {
+        int16_t c_ax, c_ay, c_az, c_gx, c_gy, c_gz;
+        int64_t t_prev  = esp_timer_get_time();
+        int64_t t_start = t_prev;
+        float ang = 0.0f, r;
+        while (esp_timer_get_time() - t_start < 2000000) {   // 2초
+            int64_t t_now = esp_timer_get_time();
+            float cdt = (t_now - t_prev) * 1e-6f;
+            t_prev = t_now;
+            if (mpu6050_read_accel_gyro(channels[0], &c_ax, &c_ay, &c_az,
+                                        &c_gx, &c_gy, &c_gz) == ESP_OK) {
+                ang = balance_estimate_angle(c_ay, c_az, c_gx, gx_bias, cdt, &r);
+            }
+            vTaskDelay(pdMS_TO_TICKS(3));
+        }
+        balance_setpoint = ang;
+        ESP_LOGI("MAIN", "balance_setpoint = %.2f deg", balance_setpoint);
+    }
+
     // 루프
-    float prev_angle = 0.0f;
-    encoder_read_angle(&prev_angle);
     int64_t prev_time = esp_timer_get_time();
 
     int16_t ax, ay, az;
-    int16_t gx, gy, gz;   // [임시] 자이로 축 확인용
+    int16_t gx, gy, gz;
     int cnt = 0;
     vTaskDelay(pdMS_TO_TICKS(10));
     while (1) {
         int64_t now_time = esp_timer_get_time();
-        float dt = (now_time-prev_time)*1e-6f;
-        // TODO: 루프 도는동안 값이 바뀔 가능성 고려해봐야함
-        mpu6050_read_accel_gyro(channels[0], &ax, &ay, &az, &gx, &gy, &gz);
-        // float target_vel = balance_control(ay, ay_init, dt);   // [보존] 속도모드
+        float dt = (now_time - prev_time) * 1e-6f;
+        prev_time = now_time;
 
-        // 상보필터 각도 추정 → 토크모드 제어
+        mpu6050_read_accel_gyro(channels[0], &ax, &ay, &az, &gx, &gy, &gz);
+
         float rate;
         float angle = balance_estimate_angle(ay, az, gx, gx_bias, dt, &rate);
-        float uq = balance_torque(angle, rate);
+        float uq = balance_torque(angle - balance_setpoint, rate);
 
         float now_angle;
         if (encoder_read_angle(&now_angle) == ESP_OK) {
-            // foc_closeloop_velocity(target_vel, dt, prev_angle, now_angle, angle_offset); // [보존]
             foc_apply_torque(uq, now_angle, angle_offset);
-            prev_time = now_time;
-            prev_angle = now_angle;
         } else {
             ESP_LOGE("ENC", "읽기 실패");
         }
 
         if(cnt>200){
-            ESP_LOGI("MAIN", "angle: %7.2f  rate: %8.2f  uq: %5.2f", angle, rate, uq);
+            ESP_LOGI("MAIN", "err: %7.2f  rate: %8.2f  uq: %5.2f",
+                     angle - balance_setpoint, rate, uq);
             cnt = 0;
         } else {
             cnt++;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1));   // 빠른 커뮤테이션 (진동 개선)
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
