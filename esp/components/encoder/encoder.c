@@ -18,20 +18,15 @@ esp_err_t encoder_init(i2c_port_t port)
 
 esp_err_t encoder_read_raw(uint16_t *raw)
 {
-    uint8_t high, low;
-    uint8_t reg_h = (uint8_t)REG_ANGLE_H;
-    uint8_t reg_l = (uint8_t)REG_ANGLE_L;
-    esp_err_t err;
-
-    err = i2c_master_write_read_device(s_port, MT6701_ADDR, &reg_h, 1, &high, 1,
-                                       pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+    // 0x03(H), 0x04(L)를 한 트랜잭션(2바이트 버스트, 주소 자동증가)으로 읽음.
+    // 별도 2회 읽으면 회전 중 두 값이 다른 시점이 되어 각도가 깨짐.
+    uint8_t buf[2];
+    uint8_t reg = (uint8_t)REG_ANGLE_H;
+    esp_err_t err = i2c_master_write_read_device(s_port, MT6701_ADDR, &reg, 1, buf, 2,
+                                                 pdMS_TO_TICKS(I2C_TIMEOUT_MS));
     if (err != ESP_OK) return err;      // 실패 전파 → 호출부가 이전 값 유지
 
-    err = i2c_master_write_read_device(s_port, MT6701_ADDR, &reg_l, 1, &low, 1,
-                                       pdMS_TO_TICKS(I2C_TIMEOUT_MS));
-    if (err != ESP_OK) return err;
-
-    *raw = (high << 6) | (low >> 2);
+    *raw = (buf[0] << 6) | (buf[1] >> 2);
     return ESP_OK;
 }
 
