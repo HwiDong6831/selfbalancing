@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>셀프밸런싱 로봇 · 센서 대시보드</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>셀프밸런싱 로봇 · 센서</h1>
+    <span id="conn" class="conn conn--off">연결 끊김</span>
+  </header>
+
+  <main>
+    <!-- 밸런싱 상태 -->
+    <section class="panel">
+      <h2>밸런싱</h2>
+      <div class="metrics">
+        <div class="metric"><span class="label">angle</span><span id="b-angle" class="val">–</span><span class="unit">deg</span></div>
+        <div class="metric"><span class="label">rate</span><span id="b-rate" class="val">–</span><span class="unit">dps</span></div>
+        <div class="metric"><span class="label">setpoint</span><span id="b-set" class="val">–</span><span class="unit">deg</span></div>
+        <div class="metric"><span class="label">uq</span><span id="b-uq" class="val">–</span><span class="unit">V</span></div>
+        <div class="metric"><span class="label">encoder</span><span id="enc" class="val">–</span><span class="unit">deg</span></div>
+      </div>
+    </section>
+
+    <!-- Voting -->
+    <section class="panel">
+      <h2>Voting <span id="vote-result" class="badge">–</span></h2>
+      <div id="vote-detail" class="vote-detail">used: –　rejected: –</div>
+    </section>
+
+    <!-- 실시간 차트 -->
+    <section class="panel panel--wide">
+      <h2>실시간 (angle / rate / uq)</h2>
+      <canvas id="chart" width="900" height="240"></canvas>
+      <div class="legend">
+        <span class="lg lg--angle">angle</span>
+        <span class="lg lg--rate">rate</span>
+        <span class="lg lg--uq">uq</span>
+      </div>
+    </section>
+
+    <!-- 센서 3개 -->
+    <section class="panel panel--wide">
+      <h2>MPU6050 ×3</h2>
+      <div id="sensors" class="sensor-grid"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
