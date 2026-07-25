@@ -97,6 +97,25 @@ main {
 .sensor-card td.k:first-child { padding-left: 0; }
 .sensor-card td.v { text-align: right; width: 64px; white-space: pre; }
 
+/* 시리얼 로그 */
+.log-opt { margin-left: auto; font-size: .72rem; color: var(--muted); font-weight: 400; display: flex; align-items: center; gap: 4px; }
+.log-btn {
+  font-size: .72rem; color: var(--muted); background: transparent;
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; cursor: pointer;
+}
+.log-btn:hover { color: var(--text); border-color: var(--muted); }
+.log {
+  height: 240px; overflow-y: auto;
+  background: #12161c; border-radius: 8px; padding: 8px 10px;
+  font-family: ui-monospace, Consolas, "Cascadia Mono", monospace;
+  font-size: .76rem; line-height: 1.5;
+  white-space: pre-wrap; word-break: break-all;
+}
+.log div { color: var(--muted); }
+.log .lv-I { color: var(--text); }
+.log .lv-W { color: var(--warn); }
+.log .lv-E { color: var(--fail); }
+
 @media (max-width: 720px) {
   main { grid-template-columns: 1fr; }
   .sensor-grid { grid-template-columns: 1fr; }

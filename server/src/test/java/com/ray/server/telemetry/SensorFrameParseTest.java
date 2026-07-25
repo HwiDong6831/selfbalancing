@@ -7,18 +7,15 @@ import tools.jackson.databind.ObjectMapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * ESP32 펌웨어(esp/main/telemetry.c 의 build_json)가 만드는 JSON 문자열이
- * SensorFrame 으로 그대로 파싱되는지 고정한다.
- *
- * 이 계약이 깨지면 서버는 프레임을 조용히 버리고 대시보드만 멈춘다.
- * 원인 추적이 어려운 실패라 테스트로 못박아 둔다.
+ * 펌웨어 build_json 이 만드는 JSON 이 SensorFrame 으로 파싱되는지 고정.
+ * 깨지면 서버가 프레임을 조용히 버리고 대시보드만 멈춰 추적이 어렵다.
  */
 class SensorFrameParseTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** telemetry.c 의 snprintf 포맷을 그대로 옮긴 샘플. */
-    private static final String ESP_JSON = """
+    static final String ESP_JSON = """
             {"ts":123456,"sensors":[\
             {"ch":0,"ax":0.012,"ay":-0.998,"az":0.031,"gx":1.20,"gy":-0.30,"gz":0.05,"fault":"none"},\
             {"ch":1,"ax":0.010,"ay":-1.001,"az":0.028,"gx":1.10,"gy":-0.25,"gz":0.02,"fault":"none"},\

@@ -12,6 +12,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 
@@ -45,13 +46,26 @@ public class DashboardWebSocketHandler extends TextWebSocketHandler implements T
         if (sessions.isEmpty()) {
             return;
         }
-        final String json;
         try {
-            json = mapper.writeValueAsString(frame);
+            broadcast(mapper.writeValueAsString(frame));
         } catch (JacksonException e) {
             log.warn("frame serialize failed", e);
+        }
+    }
+
+    @Override
+    public void publishLog(String line) {
+        if (sessions.isEmpty()) {
             return;
         }
+        try {
+            broadcast(mapper.writeValueAsString(Map.of("log", line)));
+        } catch (JacksonException e) {
+            log.warn("log serialize failed", e);
+        }
+    }
+
+    private void broadcast(String json) {
         TextMessage msg = new TextMessage(json);
         for (WebSocketSession session : sessions) {
             if (!session.isOpen()) {

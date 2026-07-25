@@ -15,9 +15,11 @@ function connect() {
   ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
   ws.onerror = () => ws.close();
   ws.onmessage = (ev) => {
-    let frame;
-    try { frame = JSON.parse(ev.data); } catch { return; }
-    render(frame);
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    // 프레임과 시리얼 로그가 같은 소켓으로 온다
+    if (typeof msg.log === "string") appendLog(msg.log);
+    else render(msg);
   };
 }
 
@@ -139,6 +141,25 @@ function renderSensors(sensors) {
     for (const k of ["ax", "ay", "az"]) c.querySelector("." + k).textContent = fmt(s[k], 3);
     for (const k of ["gx", "gy", "gz"]) c.querySelector("." + k).textContent = fmt(s[k], 1);
   });
+}
+
+// 시리얼 로그
+const LOG_CAP = 400;
+const logEl = $("log");
+const followEl = $("log-follow");
+
+$("log-clear").onclick = () => { logEl.textContent = ""; };
+
+function appendLog(line) {
+  // ESP-IDF 형식 "I (1234) TAG: 본문" 의 첫 글자가 레벨
+  const lv = /^[IWED] \(/.test(line) ? line[0] : "";
+  const row = document.createElement("div");
+  if (lv) row.className = "lv-" + lv;
+  row.textContent = line;
+  logEl.appendChild(row);
+
+  while (logEl.childElementCount > LOG_CAP) logEl.removeChild(logEl.firstChild);
+  if (followEl.checked) logEl.scrollTop = logEl.scrollHeight;
 }
 
 // 차트 렌더 루프

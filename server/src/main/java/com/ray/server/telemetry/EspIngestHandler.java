@@ -1,5 +1,6 @@
 package com.ray.server.telemetry;
 
+import com.ray.server.dto.EspLog;
 import com.ray.server.dto.SensorFrame;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -14,14 +15,15 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 /**
  * ESP32 → 서버 수신(ingest).
  *
- * 받은 JSON 을 SensorFrame 으로 파싱해 그대로 TelemetrySink 로 넘긴다.
- * DummyTelemetrySource 와 정확히 같은 자리에 끼는 "생산자"이므로,
- * 브로드캐스트/스키마/프론트는 손대지 않는다.
+ * DummyTelemetrySource 와 같은 자리에 끼는 "생산자"라 브로드캐스트/스키마/프론트는
+ * 손대지 않는다.
  */
 @Component
 public class EspIngestHandler extends TextWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(EspIngestHandler.class);
+
+    private static final String LOG_PREFIX = "{\"log\":";
 
     private final ObjectMapper mapper;
     private final TelemetrySink sink;
@@ -41,14 +43,24 @@ public class EspIngestHandler extends TextWebSocketHandler {
         log.info("ESP32 disconnected: {} ({})", session.getId(), status);
     }
 
+    /**
+     * ESP32 가 한 소켓으로 텔레메트리와 시리얼 로그를 함께 보낸다.
+     *
+     * 30Hz 로 들어오는 텔레메트리를 두 번 파싱하지 않으려고 트리 대신 접두사로 가른다.
+     * 송신 측 포맷을 이쪽이 쥐고 있어 가능 (esp/main/telemetry.c 의 send_pending_logs).
+     */
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        String payload = message.getPayload();
         try {
-            SensorFrame frame = mapper.readValue(message.getPayload(), SensorFrame.class);
-            sink.publish(frame);
+            if (payload.startsWith(LOG_PREFIX)) {
+                sink.publishLog(mapper.readValue(payload, EspLog.class).log());
+            } else {
+                sink.publish(mapper.readValue(payload, SensorFrame.class));
+            }
         } catch (JacksonException e) {
-            // 프레임 하나가 깨져도 스트림 전체를 끊지 않는다. 30Hz 라 다음 프레임이 곧 온다.
-            log.warn("ESP frame parse failed: {}", e.getOriginalMessage());
+            // 하나가 깨져도 스트림 전체를 끊지 않는다. 30Hz 라 다음 프레임이 곧 온다.
+            log.warn("ESP message parse failed: {}", e.getOriginalMessage());
         }
     }
 }

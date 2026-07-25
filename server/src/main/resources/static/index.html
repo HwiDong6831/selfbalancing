@@ -47,6 +47,16 @@
       <h2>MPU6050 ×3 <span class="unit">a: g　g: deg/s</span></h2>
       <div id="sensors" class="sensor-grid"></div>
     </section>
+
+    <!-- ESP32 시리얼 로그 -->
+    <section class="panel panel--wide">
+      <h2>
+        시리얼 로그
+        <label class="log-opt"><input type="checkbox" id="log-follow" checked> 자동 스크롤</label>
+        <button type="button" id="log-clear" class="log-btn">지우기</button>
+      </h2>
+      <div id="log" class="log"></div>
+    </section>
   </main>
 
   <script src="app.js"></script>
