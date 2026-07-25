@@ -17,14 +17,23 @@
 #include "mpu6050.h"
 #include "foc.h"
 #include "balance.h"
+#include "telemetry.h"
 
 #define I2C_PORT    I2C_NUM_0
 #define PIN_SDA     16
 #define PIN_SCL     17
 #define I2C_FREQ_HZ 100000
 
+#define TELEMETRY_ENABLED    1        // 0 = WiFi/WS 전부 컴파일 제외 (튜닝용)
+#define TELEMETRY_INTERVAL_US 33000   // ≈30Hz
+
 void app_main(void)
 {
+#if TELEMETRY_ENABLED
+    // 가장 먼저. 이후의 초기화 로그가 전부 웹 시리얼 로그에 실리도록.
+    ESP_ERROR_CHECK(telemetry_start());
+#endif
+
     // I2C 버스 생성 (레거시 드라이버: 버스 stuck 시 CPU 행 없이 타임아웃 반환)
     i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
@@ -101,27 +110,58 @@ void app_main(void)
     // 루프
     int64_t prev_time = esp_timer_get_time();
 
-    int16_t ax, ay, az;
-    int16_t gx, gy, gz;
+    int16_t raw[3][6] = {0};   // [센서][ax,ay,az,gx,gy,gz]
     int cnt = 0;
+
+#if TELEMETRY_ENABLED
+    int64_t last_send = 0;
+#endif
+
     vTaskDelay(pdMS_TO_TICKS(10));
     while (1) {
         int64_t now_time = esp_timer_get_time();
         float dt = (now_time - prev_time) * 1e-6f;
         prev_time = now_time;
 
-        mpu6050_read_accel_gyro(channels[0], &ax, &ay, &az, &gx, &gy, &gz);
+        for (int i = 0; i < num_channels; i++) {
+            mpu6050_read_accel_gyro(channels[i],
+                                    &raw[i][0], &raw[i][1], &raw[i][2],
+                                    &raw[i][3], &raw[i][4], &raw[i][5]);
+        }
 
         float rate;
-        float angle = balance_estimate_angle(ay, az, gx, gx_bias, dt, &rate);
+        float angle = balance_estimate_angle(raw[0][1], raw[0][2], raw[0][3],
+                                             gx_bias, dt, &rate);
         float uq = balance_torque(angle - balance_setpoint, rate);
 
-        float now_angle;
+        float now_angle = 0.0f;
         if (encoder_read_angle(&now_angle) == ESP_OK) {
             foc_apply_torque(uq, now_angle, angle_offset);
         } else {
             ESP_LOGE("ENC", "읽기 실패");
         }
+
+#if TELEMETRY_ENABLED
+        if (now_time - last_send >= TELEMETRY_INTERVAL_US) {
+            last_send = now_time;
+            telemetry_frame_t f;
+            for (int i = 0; i < num_channels; i++) {
+                f.sensors[i].ch = channels[i];
+                f.sensors[i].ax = raw[i][0] / 16384.0f;   // ±2g → g
+                f.sensors[i].ay = raw[i][1] / 16384.0f;
+                f.sensors[i].az = raw[i][2] / 16384.0f;
+                f.sensors[i].gx = raw[i][3] / 131.0f;     // ±250°/s → deg/s
+                f.sensors[i].gy = raw[i][4] / 131.0f;
+                f.sensors[i].gz = raw[i][5] / 131.0f;
+            }
+            f.angle     = angle;
+            f.rate      = rate;
+            f.setpoint  = balance_setpoint;
+            f.uq        = uq;
+            f.enc_angle = now_angle * (180.0f / (float)M_PI);
+            telemetry_publish(&f);
+        }
+#endif
 
         if(cnt>200){
             ESP_LOGI("MAIN", "err: %7.2f  rate: %8.2f  uq: %5.2f",

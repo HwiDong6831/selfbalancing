@@ -71,6 +71,9 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
+# WiFi SSID/비밀번호, 서버 주소 (secrets.h.example 을 복사해서 만들 것)
+main/secrets.h
+
 # User-specific configuration files
 *.user
 *.workspace # General workspace files, can be from various tools

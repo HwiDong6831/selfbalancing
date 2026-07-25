@@ -135,9 +135,9 @@ function renderSensors(sensors) {
     const f = c.querySelector(".fault");
     f.textContent = s.fault;
     f.className = "fault fault--" + s.fault;
-    for (const k of ["ax", "ay", "az", "gx", "gy", "gz"]) {
-      c.querySelector("." + k).textContent = fmt(s[k], 0);
-    }
+    // 가속도는 g(±2), 각속도는 deg/s(±250) 라 유효자리가 다르다.
+    for (const k of ["ax", "ay", "az"]) c.querySelector("." + k).textContent = fmt(s[k], 3);
+    for (const k of ["gx", "gy", "gz"]) c.querySelector("." + k).textContent = fmt(s[k], 1);
   });
 }
 

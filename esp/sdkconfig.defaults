@@ -1,3 +1,9 @@
 # FOC 커뮤테이션을 빠르게(≈kHz) 돌려 저속/정지 시 진동·소음을 없애기 위함.
 # 기본 100Hz면 전기각 갱신이 느려(스텝 큼) 진동 발생. (SimpleFOC 도 kHz로 구동)
 CONFIG_FREERTOS_HZ=1000
+
+# 코어 분리: core 0 = 제어(app_main), core 1 = 통신.
+# WiFi/TCP-IP 태스크는 기본이 core 0 이라 1kHz 제어 루프와 CPU를 다툰다.
+# 둘 다 core 1 로 밀어서 제어 루프의 주기 흔들림(jitter)을 없앤다.
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1=y
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y
