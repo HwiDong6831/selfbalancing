@@ -36,6 +36,10 @@ esp_err_t encoder_read_angle(float *angle_rad)
     esp_err_t err = encoder_read_raw(&raw);
     if (err != ESP_OK) return err;      // 실패 전파 (예전엔 항상 ESP_OK 였음)
 
-    *angle_rad = 360.0f - (float)raw * ((2.0f * M_PI) / 16384); // 모터 전기각 방향이 반대여서 360에서 빼줌
+    // 모터 전기각 방향이 반대여서 한 바퀴에서 빼준다.
+    // 한 바퀴는 2π 다. (예전엔 여기에 360 을 써서 도/라디안이 섞여 있었다.
+    //  FOC 는 now_angle - align_angle 형태로만 써서 상수가 상쇄돼 문제가 없었지만,
+    //  각도 자체를 표시하면 353.7~360 이라는 정체불명 값이 나온다.)
+    *angle_rad = (2.0f * (float)M_PI) - (float)raw * ((2.0f * (float)M_PI) / 16384.0f);
     return ESP_OK;
 }
