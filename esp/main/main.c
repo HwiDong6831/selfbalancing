@@ -15,6 +15,7 @@
 #include "driver/i2c.h"
 
 #include "encoder.h"
+#include "mpu6050.h"
 #include "foc.h"
 
 #define I2C_PORT    I2C_NUM_0
@@ -29,7 +30,20 @@
 #define STAT_US        1000000
 #define VEL_LPF        0.2f
 
+/*
+ * 루프 주기 = 커뮤테이션 갱신 주기.
+ *
+ * 1 = 999Hz(1단계, 무음) / 4 = 250Hz(2-A단계, 무음).
+ * 주기만으로는 소리가 나지 않는다는 것이 확인됐으므로 1 로 되돌린다.
+ * 여기에 MPU 읽기가 붙어 자연히 300Hz 근처가 된다.
+ */
+#define LOOP_PERIOD_MS 1
+
 static const char *TAG = "MAIN";
+
+// 제어에 쓰는 건 0 번 하나뿐이다. 나머지 둘은 나중에 표시용으로 붙인다.
+static const int MUX_CHANNELS[3] = {0, 1, 6};
+static const int NUM_SENSORS     = 3;
 
 static void i2c_bus_init(void)
 {
@@ -81,9 +95,10 @@ static void torque_loop(float offset)
     int64_t flip_time = prev_time;
     int     dir       = 1;
 
-    uint32_t loop_n = 0, enc_fail = 0;
+    uint32_t loop_n = 0, enc_fail = 0, mpu_fail = 0;
     float    d_max = 0.0f, wheel_vel = 0.0f;
     int64_t  d_max_dt_us = 0;
+    int16_t  ax, ay, az, gx, gy, gz;
 
     float prev_angle = 0.0f;
     encoder_read_angle(&prev_angle);
@@ -100,6 +115,12 @@ static void torque_loop(float offset)
         if (now - flip_time >= FLIP_US) {
             flip_time = now;
             dir = -dir;
+        }
+
+        // 2-B: 값은 쓰지 않는다. 같은 통신선에 mux + MPU 트랜잭션을 끼워넣는 것만이 목적이다.
+        // 실패 1 회 = I2C 타임아웃 10ms 이므로 반드시 세어야 한다.
+        if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az, &gx, &gy, &gz) != ESP_OK) {
+            mpu_fail++;
         }
 
         float angle;
@@ -128,18 +149,19 @@ static void torque_loop(float offset)
             float d_max_deg  = d_max * 180.0f / (float)M_PI;
             float explain_deg = fabsf(wheel_vel) * (d_max_dt_us * 1e-6f) * 180.0f / (float)M_PI;
 
-            ESP_LOGI(TAG, "loop %luHz  휠 %6.1f rad/s  실패 %lu  "
+            ESP_LOGI(TAG, "loop %luHz  휠 %6.1f rad/s  엔코더실패 %lu  MPU실패 %lu  "
                           "최대변화 %.1f도 (dt %.1fms 설명가능 %.1f도 = %.1f배)",
-                     (unsigned long)loop_n, wheel_vel, (unsigned long)enc_fail,
+                     (unsigned long)loop_n, wheel_vel,
+                     (unsigned long)enc_fail, (unsigned long)mpu_fail,
                      d_max_deg, d_max_dt_us * 1e-3f, explain_deg,
                      (explain_deg > 0.01f) ? d_max_deg / explain_deg : 0.0f);
 
-            loop_n = enc_fail = 0;
+            loop_n = enc_fail = mpu_fail = 0;
             d_max = 0.0f;
             d_max_dt_us = 0;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(LOOP_PERIOD_MS));
     }
 }
 
@@ -147,6 +169,7 @@ void app_main(void)
 {
     i2c_bus_init();
     ESP_ERROR_CHECK(encoder_init(I2C_PORT));
+    ESP_ERROR_CHECK(mpu6050_init(I2C_PORT, MUX_CHANNELS, NUM_SENSORS));
 
     foc_init();
     foc_enable(true);
