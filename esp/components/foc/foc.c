@@ -11,7 +11,13 @@
 #define PIN_IN3         23
 
 // PWM 설정
-#define PWM_FREQ_HZ     22000                   // 가청주파수 위로 설정해서 모터에서 소리 안나게 함
+//
+// 22kHz 는 가청 대역 위라 구동음이 안 들리지만, 스위칭 잡음이 I2C 통신을 깨뜨려
+// 엔코더 값이 손상되고 커뮤테이션에 타격음이 생긴다.
+// 실측 엔코더 손상률: 22k 0.29% / 15k 0.53% / 12k 0.28% / 10k 0.00%.
+// 10~12kHz 사이가 경계라 10kHz 로 둔다. 대신 가청이라 구동음이 들린다.
+// (2026-07-27 일지 참조)
+#define PWM_FREQ_HZ     10000
 #define PWM_RES         LEDC_TIMER_11_BIT       // pwm 주파수를 뽑으려면 11비트가 최대
 #define DUTY_MAX        2047                    // 11비트
 #define PWM_MODE        LEDC_LOW_SPEED_MODE
@@ -99,11 +105,6 @@ void foc_enable(bool on)
     }
 }
 
-
-esp_err_t foc_set_pwm_freq(uint32_t hz)
-{
-    return ledc_set_freq(PWM_MODE, PWM_TIMER, hz);
-}
 
 float foc_align(float align_angle){
     // d축 정렬 시 회전자 전기각 0°. angle_el = PP·(now_angle - align_angle) 되도록 음수 offset.

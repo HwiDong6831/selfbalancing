@@ -41,17 +41,9 @@ esp_err_t mpu6050_read_accel_gyro(int channel,
                                   int16_t *gx, int16_t *gy, int16_t *gz);
 
 /*
- * 읽기 실패의 내역을 확인한다(진단용). 호출하면 카운터를 읽고 0 으로 되돌린다.
- *
- * mux_fail  : mux 채널 쓰기(0x70) 실패
- * data_nack : 데이터 읽기에서 센서가 주소에 응답하지 않음 (ESP_FAIL)
- * data_tout : 데이터 읽기가 통신선 점유로 시간 초과 (ESP_ERR_TIMEOUT)
- *
- * 셋 다 NULL 허용.
+ * 실제 올라간 칩은 MPU6050 이 아니라 MPU6500 이다 (WHO_AM_I = 0x70).
+ * 여기서 쓰는 레지스터는 두 칩이 같아 동작에는 차이가 없다.
  */
-void mpu6050_take_fail_counts(uint32_t *mux_fail,
-                              uint32_t *data_nack,
-                              uint32_t *data_tout);
 
 #ifdef __cplusplus
 }

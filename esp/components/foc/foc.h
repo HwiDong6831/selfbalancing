@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdbool.h>
-#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -12,14 +11,6 @@ void foc_init(void);
 
 // 드라이버 enable/disable.
 void foc_enable(bool on);
-
-/*
- * PWM 주파수 변경 (진단용).
- *
- * 스위칭 가장자리가 I2C 를 방해하는지 보려고 주파수만 바꿔 비교할 때 쓴다.
- * 11비트 해상도를 유지해야 하므로 80MHz/hz 가 2048 이상이어야 한다(= 39kHz 이하).
- */
-esp_err_t foc_set_pwm_freq(uint32_t hz);
 
 float foc_align(float align_angle);
 

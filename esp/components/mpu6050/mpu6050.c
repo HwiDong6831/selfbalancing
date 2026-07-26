@@ -18,22 +18,6 @@
 // (ESP32 Arduino Wire 도 내부적으로 이 레거시 드라이버 기반)
 static i2c_port_t s_port;
 
-// 진단용. 읽기 한 번은 mux 채널 쓰기 + 데이터 읽기 두 거래로 이뤄지고,
-// 데이터 읽기 실패는 응답 없음(NACK)과 시간 초과로 갈린다.
-static uint32_t s_mux_fail;
-static uint32_t s_data_nack;
-static uint32_t s_data_tout;
-
-void mpu6050_take_fail_counts(uint32_t *mux_fail,
-                              uint32_t *data_nack,
-                              uint32_t *data_tout)
-{
-    if (mux_fail)  *mux_fail  = s_mux_fail;
-    if (data_nack) *data_nack = s_data_nack;
-    if (data_tout) *data_tout = s_data_tout;
-    s_mux_fail = s_data_nack = s_data_tout = 0;
-}
-
 static esp_err_t mux_select(int channel)
 {
     uint8_t mask = (uint8_t)(1 << channel);
@@ -108,27 +92,21 @@ esp_err_t mpu6050_read_accel_gyro(int channel,
 {
     // mux 채널 선택
     esp_err_t err = mux_select(channel);
-    if (err != ESP_OK) {
-        s_mux_fail++;
-        return err;                        // 실패 시 출력 안 건드림 → 호출부가 이전 값 유지
-    }
+    if (err != ESP_OK) return err;         // 실패 시 출력 안 건드림 → 호출부가 이전 값 유지
 
     // 채널 전환 직후 다운스트림 버스가 안정될 때까지 대기
     esp_rom_delay_us(MUX_SETTLE_US);
 
     // ACCEL_XOUT_H 부터 14바이트 버스트: accel(6) + temp(2) + gyro(6).
     // 한 트랜잭션으로 읽어 같은 시점의 accel/gyro 확보.
+    //
+    // 실패는 거의 전부 ESP_ERR_TIMEOUT 이고, PWM 스위칭 잡음이 원인이다.
+    // 통신 속도·mux 전환·센서 무응답은 전부 배제됐다(2026-07-27 일지).
     uint8_t raw[14] = {0};
     uint8_t reg = REG_ACCEL_XOUT;
     err = i2c_master_write_read_device(s_port, MPU_ADDR, &reg, 1, raw, 14,
                                        pdMS_TO_TICKS(I2C_TIMEOUT_MS));
-    if (err != ESP_OK) {
-        // ESP_ERR_TIMEOUT = 통신선이 붙잡혀 거래를 못 끝냄
-        // 그 외(주로 ESP_FAIL) = 주소를 보냈는데 센서가 응답 안 함
-        if (err == ESP_ERR_TIMEOUT) s_data_tout++;
-        else                        s_data_nack++;
-        return err;                        // 실패 시 출력 안 건드림 → 호출부가 이전 값 유지
-    }
+    if (err != ESP_OK) return err;         // 실패 시 출력 안 건드림 → 호출부가 이전 값 유지
 
     *ax = (int16_t)(raw[0]  << 8 | raw[1]);
     *ay = (int16_t)(raw[2]  << 8 | raw[3]);
