@@ -1,6 +1,0 @@
-dependencies:
-  idf:
-    version: ">=5.0"
-  # ESP32 를 WebSocket "클라이언트" 로 동작시키는 공식 컴포넌트.
-  # 재연결/핑퐁 처리가 내장돼 있어 직접 구현할 게 없다.
-  espressif/esp_websocket_client: "^1.2.0"

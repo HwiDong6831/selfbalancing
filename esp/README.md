@@ -1,53 +1,37 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 | Linux |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- | -------- | ----- |
+# esp — 밸런싱 로봇 펌웨어 (ESP-IDF v5.5)
 
-# Hello World Example
+ESP32 D1 Mini 에서 도는 제어 펌웨어. core 0 이 제어 루프, core 1 이 통신을 맡는다.
 
-Starts a FreeRTOS task to print "Hello World".
-
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
-
-## How to use example
-
-Follow detailed instructions provided specifically for this example.
-
-Select the instructions depending on Espressif chip installed on your development board:
-
-- [ESP32 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/stable/get-started/index.html)
-- [ESP32-S2 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/get-started/index.html)
-
-
-## Example folder contents
-
-The project **hello_world** contains one source file in C language [hello_world_main.c](main/hello_world_main.c). The file is located in folder [main](main).
-
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt` files that provide set of directives and instructions describing the project's source files and targets (executable, library, or both).
-
-Below is short explanation of remaining files in the project folder.
+## 구조
 
 ```
-├── CMakeLists.txt
-├── pytest_hello_world.py      Python script used for automated testing
-├── main
-│   ├── CMakeLists.txt
-│   └── hello_world_main.c
-└── README.md                  This is the file you are currently reading
+main/           app_main. 초기화 → 캘리브레이션 → 1kHz 제어 루프
+components/
+  mpu6050/      MPU6050 ×3 (TCA9548A mux 0x70)
+  encoder/      MT6701 자기 인코더 (0x06)
+  foc/          전압모드 FOC (LEDC 3-PWM + EN)
+  balance/      상보필터 각도 추정 + 토크모드 상태피드백
+  telemetry/    WiFi STA + WebSocket 송신 + ESP_LOGx 미러링
 ```
 
-For more information on structure and contents of ESP-IDF projects, please refer to Section [Build System](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html) of the ESP-IDF Programming Guide.
+## 빌드
 
-## Troubleshooting
+`export.ps1` 이 py3.14 가상환경을 찾는데 실제 설치된 건 py3.11 이라 경로를 먼저 지정해야 한다.
 
-* Program upload failure
+```powershell
+$env:IDF_PYTHON_ENV_PATH="C:\Espressif\python_env\idf5.5_py3.11_env"
+. C:\Espressif\frameworks\esp-idf-v5.5.4\export.ps1
 
-    * Hardware connection is not correct: run `idf.py -p PORT monitor`, and reboot your board to see if there are any output logs.
-    * The baud rate for downloading is too high: lower your baud rate in the `menuconfig` menu, and try again.
+idf.py build
+idf.py -p COM<n> flash monitor
+```
 
-## Technical support and feedback
+WiFi/서버 주소는 커밋되지 않는다.
+아래 명령어로 secrets.h 파일을 생성한 후, 내부에 로봇을 연결할 WiFi 및 서버 정보를 기입한다.
+```
+cp main/secrets.h.example main/secrets.h
+```
 
-Please use the following feedback channels:
+## 주의
 
-* For technical queries, go to the [esp32.com](https://esp32.com/) forum
-* For a feature request or bug report, create a [GitHub issue](https://github.com/espressif/esp-idf/issues)
-
-We will get back to you as soon as possible.
+- 튜닝 중 통신을 완전히 배제하려면 `main.c` 의 `TELEMETRY_ENABLED` 를 0 으로 변경한다.

@@ -1,5 +1,4 @@
 #include "telemetry.h"
-#include "secrets.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -21,17 +20,18 @@
 
 static const char *TAG = "TELE";
 
-#define COMM_CORE       1       // 제어 루프(app_main)는 core 0
+#define COMM_CORE       1       // 제어 루프는 core 0, 통신 루프는 core 1
 #define TASK_STACK      4096
 #define TASK_PRIO       3
 #define JSON_BUF_SIZE   768
 
 #define LOG_LINE_MAX    160
-#define LOG_Q_LEN       48      // WS 연결 전 부팅 로그를 담을 만큼
+#define LOG_Q_LEN       48      // WS 연결 전 부팅 로그 저장 길이
 #define LOG_DRAIN_MAX   8
 
 #define WIFI_GOT_IP_BIT BIT0
 
+static telemetry_config_t       s_cfg;
 static EventGroupHandle_t       s_wifi_events;
 static QueueHandle_t            s_frame_q;
 static QueueHandle_t            s_log_q;
@@ -56,7 +56,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 
 static esp_err_t wifi_start_sta(void)
 {
-    // WiFi 드라이버가 보정값을 NVS 에 저장하므로 NVS 초기화가 선행돼야 한다.
+    // WiFi 드라이버가 보정값을 NVS 에 저장하므로 NVS 초기화가 선행됨
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -78,20 +78,18 @@ static esp_err_t wifi_start_sta(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
             IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL, NULL));
 
-    wifi_config_t wc = {
-        .sta = {
-            .ssid     = WIFI_SSID,
-            .password = WIFI_PASSWORD,
-        },
-    };
+    wifi_config_t wc = {0};
+    strlcpy((char *)wc.sta.ssid,     s_cfg.wifi_ssid,     sizeof(wc.sta.ssid));
+    strlcpy((char *)wc.sta.password, s_cfg.wifi_password, sizeof(wc.sta.password));
+
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
 
-    // 절전 모드를 켜두면 송신 지연이 수십~수백 ms 까지 튄다.
+    // wifi 절전 모드 off(절전모드 들어가면 느려짐)
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "WiFi 연결 대기: %s", WIFI_SSID);
+    ESP_LOGI(TAG, "WiFi 연결 대기: %s", s_cfg.wifi_ssid);
     xEventGroupWaitBits(s_wifi_events, WIFI_GOT_IP_BIT,
                         pdFALSE, pdTRUE, portMAX_DELAY);
     return ESP_OK;
@@ -102,7 +100,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
 {
     switch (id) {
     case WEBSOCKET_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "서버 연결됨: %s", SERVER_WS_URI);
+        ESP_LOGI(TAG, "서버 연결됨: %s", s_cfg.server_uri);
         break;
     case WEBSOCKET_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "서버 연결 끊김 (자동 재시도)");
@@ -112,7 +110,7 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
     }
 }
 
-/* nan 이면 snprintf 가 "nan" 을 뱉어 JSON 이 깨지고 프레임이 통째로 버려진다. */
+// nan 이면 snprintf 가 "nan" 을 뱉어 JSON 이 깨지고 서버가 프레임을 통째로 버린다.
 static float fin(float v)
 {
     return isfinite(v) ? v : 0.0f;
@@ -134,7 +132,7 @@ static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
             fin(s->gx), fin(s->gy), fin(s->gz));
     }
 
-    // voting 은 FR-2 구현 전이라 고정값
+    // voting 구현 전이라 고정값
     len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
         "],\"voting\":{\"result\":\"ok\",\"used\":[%d,%d,%d],\"rejected\":[]},"
         "\"balance\":{\"angle\":%.2f,\"rate\":%.2f,\"setpoint\":%.2f,\"uq\":%.3f},"
@@ -149,10 +147,10 @@ static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
 static vprintf_like_t s_prev_vprintf;
 
 /*
- * ESP_LOGx 를 가로채 큐에 복사. 시리얼 출력은 유지.
+ * ESP_LOGx 후킹. 시리얼 출력은 유지하고 큐에 복사만 한다.
  *
- * 아무 태스크에서나(WiFi/lwIP 내부 포함) 불리므로 블록 금지. 여기서 직접
- * WS 전송을 하면 전송이 찍는 에러 로그로 무한 재귀에 빠진다.
+ * WiFi/lwIP 내부를 포함한 아무 태스크에서나 불리므로 블록 금지.
+ * 여기서 직접 WS 전송을 하면 전송이 찍는 에러 로그로 무한 재귀에 빠진다.
  * CONFIG_LOG_VERSION=1 기준 (한 줄 = 호출 1회).
  */
 static int log_vprintf(const char *fmt, va_list args)
@@ -238,8 +236,13 @@ static void telemetry_task(void *arg)
     }
 }
 
-esp_err_t telemetry_start(void)
+esp_err_t telemetry_start(const telemetry_config_t *cfg)
 {
+    if (!cfg || !cfg->wifi_ssid || !cfg->wifi_password || !cfg->server_uri) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_cfg = *cfg;
+
     ESP_ERROR_CHECK(wifi_start_sta());
 
     s_frame_q = xQueueCreate(1, sizeof(telemetry_frame_t));
@@ -249,7 +252,7 @@ esp_err_t telemetry_start(void)
     }
 
     esp_websocket_client_config_t ws_cfg = {
-        .uri                  = SERVER_WS_URI,
+        .uri                  = s_cfg.server_uri,
         .reconnect_timeout_ms = 2000,
         .network_timeout_ms   = 3000,
         .task_stack           = TASK_STACK,
