@@ -100,6 +100,11 @@ void foc_enable(bool on)
 }
 
 
+esp_err_t foc_set_pwm_freq(uint32_t hz)
+{
+    return ledc_set_freq(PWM_MODE, PWM_TIMER, hz);
+}
+
 float foc_align(float align_angle){
     // d축 정렬 시 회전자 전기각 0°. angle_el = PP·(now_angle - align_angle) 되도록 음수 offset.
     return -align_angle * POLE_PAIRS;
