@@ -10,12 +10,22 @@
 #define GYRO_LSB_PER_DPS  131.0f                // 자이로 기본 ±250°/s
 #define COMP_ALPHA        0.98f                 // 자이로 비중 (나머지는 가속도로 드리프트 보정)
 
-// 토크모드 상태피드백
-#define BAL_K1          -2.0f                   // angle 게인 [V/deg] (부호: 실기 확인해 반대라 음수)
-#define BAL_K2          -0.4f                    // rate 게인 [V/(deg/s)] (부호 확인 후 추가, K1과 같은 부호계열)
-#define UQ_LIMIT        3.0f                     // uq 클램프 [V]. 부호 확인용으로 낮춰 둔 값
-#define TILT_CUTOFF     35.0f                   // |angle| 초과 시 정지 [deg]
-#define DEADBAND        1.0f                    // |error| < 이 값이면 각도항 무시 [deg]
+/*
+ * 토크모드 상태피드백. 세 항이 서로 다른 시간 규모를 본다.
+ *
+ *   K1 넘어져 있다          → 되돌린다
+ *   K2 넘어지려 한다        → 미리 막는다 (가장 빠름)
+ *   K3 계속 이쪽으로 밀린다 → 기준 자세 자체를 옮긴다 (가장 느림)
+ *
+ * 부호는 전부 실기에서 쟀다. 계산으로 유도해 두 번 틀렸다(2026-07-28 일지).
+ */
+#define BAL_K1          -4.0f    // angle 게인 [V/deg]
+#define BAL_K2          -1.0f    // rate 게인 [V/(deg/s)]. 잡음이 들어오는 유일한 창구다
+#define BAL_K3           0.3f    // 휠속도 게인 [V/(rad/s)]. K1/K2 와 부호가 반대다
+
+#define UQ_LIMIT        6.0f     // uq 클램프 [V]. foc.c 의 선형 한계(V_SUPPLY/2)를 3% 넘는다
+#define TILT_CUTOFF     35.0f    // |angle| 초과 시 정지 [deg]
+#define DEADBAND        0.0f     // |error| < 이 값이면 각도항 무시 [deg]. 0 = 끔
 
 static float clampf(float x, float lo, float hi)
 {
@@ -24,16 +34,17 @@ static float clampf(float x, float lo, float hi)
     return x;
 }
 
-// uq = K1·angle + K2·rate. angle=0 이 목표(똑바로).
-// 부호가 반대면 즉시 넘어짐 → BAL_K1/K2 부호 뒤집기.
-float balance_torque(float angle, float rate)
+// angle=0 이 목표(똑바로). 부호가 반대면 기울수록 넘어지는 쪽으로 밀어 즉시 넘어진다.
+float balance_torque(float angle, float rate, float wheel_vel)
 {
     if (fabsf(angle) > TILT_CUTOFF) return 0.0f;   // 넘어짐 → 모터 정지
 
-    // ±DEADBAND 안에서는 각도항 무시(미세 진동 억제). 밖이면 full 인가(경계 넘으면 확).
-    // 각속도항은 항상 유지 → 초기 낙하 감지·댐핑.
+    // 데드밴드는 복원력이 0 인 구간을 만든다. 미세 진동을 막는 값보다 그 대가가 커서 껐다.
     float pos = (fabsf(angle) < DEADBAND) ? 0.0f : angle;
-    float uq = BAL_K1 * pos + BAL_K2 * rate;
+
+    // 휠이 한쪽으로 계속 감긴다 = 지금 0 도라고 믿는 자세가 사실은 기울어 있다.
+    // 그 신호로 목표 자세를 옮겨, 기준 각도가 정확하지 않아도 진짜 균형점을 찾아가게 한다.
+    float uq = BAL_K1 * pos + BAL_K2 * rate + BAL_K3 * wheel_vel;
     return clampf(uq, -UQ_LIMIT, UQ_LIMIT);
 }
 

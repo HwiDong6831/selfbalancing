@@ -24,7 +24,11 @@
 #define PWM_TIMER       LEDC_TIMER_0
 
 // 전압
-#define V_SUPPLY        11.3f                   // VM 실측
+//
+// duty = u/V_SUPPLY + 0.5 로 만들므로 duty 가 0~1 을 안 벗어나려면 |u| <= V_SUPPLY/2 여야
+// 한다. 즉 uq 의 선형 상한이 5.8V 다. 넘으면 사인파 꼭대기가 잘려 토크가 맥동한다.
+// 더 필요하면 SVPWM 으로 약 15% 더 뽑을 수 있다.
+#define V_SUPPLY        11.6f                   // VM 실측
 #define POLE_PAIRS      7                       // 2804 모터 (임시)
 
 
@@ -117,13 +121,12 @@ float foc_align(float angle_fwd, float angle_rev)
     float off  = atan2f(sinf(a) + sinf(b), cosf(a) + cosf(b));
     float diff = atan2f(sinf(a - b), cosf(a - b));   // 정렬 편향의 2배. 스윕 검증용
 
-    ESP_LOGI("FOC", "정렬 오프셋 %.1f도 (정/역 편차 %.1f도)",
+    ESP_LOGI("FOC", "정렬 오프셋 %.1f도 (정방향/역방향 편차 %.1f도)",
              off * 180.0f / (float)M_PI, diff * 180.0f / (float)M_PI);
 
     return off;
 }
 
-// 
 void foc_set_phase_voltage(float ud, float uq, float angle_el)
 {
     float c = cosf(normalize_angle(angle_el));

@@ -1,8 +1,8 @@
 /*
- * 2단계 — 엔코더 폐루프 커뮤테이션 + 고정 토크.
+ * 3단계 — 밸런싱.
  *
- * MPU 는 읽기만 하고 제어에는 쓰지 않는다. 통신선을 공유하는 상태를 만드는 것이
- * 목적이다. 3단계에서 기울기 제어를 붙인다.
+ * MPU(mux 채널 0)로 기울기를 추정해 q축 전압을 만들고, 엔코더 폐루프 커뮤테이션으로
+ * 모터에 인가한다. 제어는 별도 태스크에서 돌고 app_main 은 로그만 찍는다.
  */
 #include <math.h>
 #include "freertos/FreeRTOS.h"
@@ -26,9 +26,9 @@
 #define VEL_LPF        0.2f
 
 /*
- * 0 = 계측만. 드라이버 EN 을 끄고 정렬도 건너뛴다. uq 는 계산해서 찍기만 한다.
- * 부호가 반대면 기울수록 넘어지는 쪽으로 세게 밀어붙이므로, 모터를 물리기 전에
- * 손으로 기울여 로그로 확인한다.
+ * 0 = 계측만. 드라이버 EN 을 끄고 정렬도 건너뛴다. 제어 루프는 그대로 돌며 uq 를 찍는다.
+ * 별도 계측 루프를 두지 않는 이유는, 그러면 실제로 돌릴 코드와 다른 코드를 검증하게 되기
+ * 때문이다. 게인·부호를 손대고 모터를 물리기 전에 0 으로 두고 로그부터 확인한다.
  */
 #define DRIVE_MOTOR    1
 
@@ -53,7 +53,7 @@
 #define ENC_MAX_VEL    80.0f
 #define ENC_BAD_FLOOR  0.30f
 
-#define STAT_US        1000000
+#define STAT_US        100000      // 통계 창. 0.7초짜리 넘어짐을 보려면 10Hz 는 되어야 한다
 
 // 로그 출력(190자 @115200 = 16.5ms)이 커뮤테이션을 멈추지 않도록 제어를 별도 태스크로
 // 뺀다. 우선순위가 높으면 로그 태스크가 UART 를 기다리는 중이어도 즉시 뺏어온다.
@@ -79,6 +79,7 @@ typedef struct {
 
 typedef struct {
     stats_t st;
+    int64_t win_us;     // 이 창의 실제 길이. loop Hz 를 정확히 내려면 필요하다
     float   wheel_vel;
     float   angle;      // 기울기 [deg], 0 = 똑바로
     float   rate;       // 기울기 각속도 [deg/s]
@@ -129,9 +130,11 @@ static void stats_print(const stats_msg_t *m)
     float d_max_deg = st->d_max * 180.0f / (float)M_PI;
     float explain   = fabsf(m->wheel_vel) * (st->d_max_dt_us * 1e-6f) * 180.0f / (float)M_PI;
 
+    unsigned long hz = m->win_us ? (unsigned long)(st->loops * 1000000LL / m->win_us) : 0;
+
     ESP_LOGI(TAG, "loop %luHz  각도 %6.1f도  각속도 %7.1f도/s  uq %6.2fV  "
                   "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상 %lu  최대변화 %.1f도(%.1f배)",
-             (unsigned long)st->loops, m->angle, m->rate, m->uq, m->wheel_vel,
+             hz, m->angle, m->rate, m->uq, m->wheel_vel,
              (unsigned long)st->mpu_fail,
              st->loops ? 100.0f * st->mpu_fail / st->loops : 0.0f,
              (unsigned long)st->enc_bad,
@@ -249,7 +252,7 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
             st.mpu_fail++;
         } else {
             tilt = balance_estimate_angle(ay, az, gx, gx_bias, dt, &rate) - setpoint;
-            uq   = balance_torque(tilt, rate);
+            uq   = balance_torque(tilt, rate, wheel_vel);
         }
 
         float angle;
@@ -276,9 +279,10 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
         }
 
         if (now - last_stat >= STAT_US) {
-            last_stat = now;
-            stats_msg_t msg = { .st = st, .wheel_vel = wheel_vel,
+            stats_msg_t msg = { .st = st, .win_us = now - last_stat,
+                                .wheel_vel = wheel_vel,
                                 .angle = tilt, .rate = rate, .uq = uq };
+            last_stat = now;
             xQueueOverwrite(s_stats_q, &msg);
             st = (stats_t){0};
         }

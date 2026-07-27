@@ -12,12 +12,13 @@ extern "C" {
 /*
  * 토크모드 밸런싱 제어 (상태피드백).
  *
- * angle : 상보필터 추정 각도 [deg] (0 = 똑바로)
- * rate  : 각속도 [deg/s]
+ * angle     : 상보필터 추정 각도 [deg] (0 = 똑바로)
+ * rate      : 각속도 [deg/s]
+ * wheel_vel : 휠 속도 [rad/s]. 한쪽으로 계속 감기면 기준 각도가 틀렸다는 신호다
  *
  * 반환: q축 전압 uq [V]. |angle| > 컷오프면 0 (넘어짐 → 정지).
  */
-float balance_torque(float angle, float rate);
+float balance_torque(float angle, float rate, float wheel_vel);
 
 /*
  * 상보필터로 tilt 각도 추정 (자이로 gx + 가속도 ay/az 융합).
