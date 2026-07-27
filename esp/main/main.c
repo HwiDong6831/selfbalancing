@@ -15,6 +15,7 @@
 #include "encoder.h"
 #include "mpu6050.h"
 #include "foc.h"
+#include "balance.h"
 
 #define I2C_PORT       I2C_NUM_0
 #define PIN_SDA        16
@@ -22,9 +23,17 @@
 #define I2C_FREQ_HZ    100000
 
 #define LOOP_PERIOD_MS 1           // 여기에 MPU 읽기 시간이 더해져 실제로는 약 250Hz
-#define TEST_UQ        3.0f        // q축 전압 [V]
-#define FLIP_US        5000000     // 회전 방향 유지 시간
 #define VEL_LPF        0.2f
+
+/*
+ * 0 = 계측만. 드라이버 EN 을 끄고 정렬도 건너뛴다. uq 는 계산해서 찍기만 한다.
+ * 부호가 반대면 기울수록 넘어지는 쪽으로 세게 밀어붙이므로, 모터를 물리기 전에
+ * 손으로 기울여 로그로 확인한다.
+ */
+#define DRIVE_MOTOR    1
+
+#define GYRO_CAL_N     200         // gx bias 평균 샘플 수 (5ms 간격 = 1초)
+#define SETPOINT_MS    2000        // 똑바로 세운 채 상보필터를 수렴시키는 시간
 
 #define LAG_COMP       1.0f        // 커뮤테이션 지연 보상. 1.0 = 한 루프치, 0.0 = 보상 없음
 
@@ -71,6 +80,9 @@ typedef struct {
 typedef struct {
     stats_t st;
     float   wheel_vel;
+    float   angle;      // 기울기 [deg], 0 = 똑바로
+    float   rate;       // 기울기 각속도 [deg/s]
+    float   uq;         // balance_torque 가 낸 q축 전압 [V]
 } stats_msg_t;
 
 static QueueHandle_t s_stats_q;   // 길이 1. 제어 루프는 덮어쓰기만 하고 대기하지 않는다
@@ -111,22 +123,22 @@ static void stats_add(stats_t *st, float d, float dt, int64_t dt_us)
  * 최대 각도 변화가 그 순간 물리적으로 가능한 값(dt × 휠속도)의 몇 배인지 같이 찍는다.
  * 1.0 근처면 정상이고, 크게 넘으면 엔코더가 틀린 값을 준 것이다.
  */
-static void stats_print(const stats_t *st, float wheel_vel)
+static void stats_print(const stats_msg_t *m)
 {
+    const stats_t *st = &m->st;
     float d_max_deg = st->d_max * 180.0f / (float)M_PI;
-    float explain   = fabsf(wheel_vel) * (st->d_max_dt_us * 1e-6f) * 180.0f / (float)M_PI;
+    float explain   = fabsf(m->wheel_vel) * (st->d_max_dt_us * 1e-6f) * 180.0f / (float)M_PI;
 
-    ESP_LOGI(TAG, "loop %luHz  휠 %6.1f  엔코더실패 %lu  MPU실패 %lu(%.2f%%)  "
-                  "손상 %lu(%.2f%%)  최대변화 %.1f도(%.1f배)",
-             (unsigned long)st->loops, wheel_vel,
-             (unsigned long)st->enc_fail,
+    ESP_LOGI(TAG, "loop %luHz  각도 %6.1f도  각속도 %7.1f도/s  uq %6.2fV  "
+                  "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상 %lu  최대변화 %.1f도(%.1f배)",
+             (unsigned long)st->loops, m->angle, m->rate, m->uq, m->wheel_vel,
              (unsigned long)st->mpu_fail,
              st->loops ? 100.0f * st->mpu_fail / st->loops : 0.0f,
              (unsigned long)st->enc_bad,
-             st->loops ? 100.0f * st->enc_bad / st->loops : 0.0f,
              d_max_deg, (explain > 0.01f) ? d_max_deg / explain : 0.0f);
 }
 
+#if DRIVE_MOTOR
 // 엔코더 각도 평균. 0/2π 경계를 넘어도 되도록 단위벡터로 더한다.
 static float read_angle_avg(void)
 {
@@ -171,15 +183,55 @@ static float align_rotor(void)
 
     return foc_align(angle_fwd, angle_rev);
 }
+#endif  // DRIVE_MOTOR
 
-static void torque_loop(float offset)
+// 정지 상태에서 재는 자이로 영점. 이 값을 빼야 적분이 드리프트하지 않는다.
+static float measure_gyro_bias(void)
+{
+    int32_t sum = 0;
+    int     n   = 0;
+    int16_t ax, ay, az, gx, gy, gz;
+
+    for (int i = 0; i < GYRO_CAL_N; i++) {
+        if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az,
+                                    &gx, &gy, &gz) == ESP_OK) {
+            sum += gx;
+            n++;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return n ? (float)sum / n : 0.0f;
+}
+
+// 조립 오차 때문에 "진짜 똑바로" 가 센서상 0 이 아니다. 세워 둔 채 수렴시켜 기준을 잡는다.
+static float measure_setpoint(float gx_bias)
+{
+    int64_t t0 = esp_timer_get_time(), prev = t0;
+    float   angle = 0.0f, rate;
+    int16_t ax, ay, az, gx, gy, gz;
+
+    while (esp_timer_get_time() - t0 < (int64_t)SETPOINT_MS * 1000) {
+        int64_t now = esp_timer_get_time();
+        float   dt  = (now - prev) * 1e-6f;
+        prev = now;
+
+        if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az,
+                                    &gx, &gy, &gz) == ESP_OK) {
+            angle = balance_estimate_angle(ay, az, gx, gx_bias, dt, &rate);
+        }
+        vTaskDelay(pdMS_TO_TICKS(LOOP_PERIOD_MS));
+    }
+    return angle;
+}
+
+static void balance_loop(float offset, float gx_bias, float setpoint)
 {
     int64_t now       = esp_timer_get_time();
-    int64_t prev_time = now, last_stat = now, flip_time = now;
-    int     dir       = 1;
+    int64_t prev_time = now, last_stat = now;
 
     stats_t st = {0};
     float   wheel_vel = 0.0f, prev_angle = 0.0f;
+    float   tilt = 0.0f, rate = 0.0f, uq = 0.0f;
     int16_t ax, ay, az, gx, gy, gz;
 
     encoder_read_angle(&prev_angle);
@@ -191,15 +243,13 @@ static void torque_loop(float offset)
         prev_time = now;
         st.loops++;
 
-        if (now - flip_time >= FLIP_US) {
-            flip_time = now;
-            dir = -dir;
-        }
-
-        // 값은 아직 쓰지 않는다. 실패 1회는 I2C 타임아웃 10ms 라 반드시 세어야 한다.
+        // 실패 1회는 I2C 타임아웃 10ms 라 반드시 세어야 한다.
         if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az,
                                     &gx, &gy, &gz) != ESP_OK) {
             st.mpu_fail++;
+        } else {
+            tilt = balance_estimate_angle(ay, az, gx, gx_bias, dt, &rate) - setpoint;
+            uq   = balance_torque(tilt, rate);
         }
 
         float angle;
@@ -221,12 +271,14 @@ static void torque_loop(float offset)
             if (adv >  adv_max) adv =  adv_max;
             if (adv < -adv_max) adv = -adv_max;
 
-            foc_apply_torque(dir * TEST_UQ, angle + adv, offset);
+            // DRIVE_MOTOR 0 이면 EN 이 꺼져 있어 duty 를 써도 출력이 나가지 않는다.
+            foc_apply_torque(uq, angle + adv, offset);
         }
 
         if (now - last_stat >= STAT_US) {
             last_stat = now;
-            stats_msg_t msg = { .st = st, .wheel_vel = wheel_vel };
+            stats_msg_t msg = { .st = st, .wheel_vel = wheel_vel,
+                                .angle = tilt, .rate = rate, .uq = uq };
             xQueueOverwrite(s_stats_q, &msg);
             st = (stats_t){0};
         }
@@ -237,7 +289,20 @@ static void torque_loop(float offset)
 
 static void control_task(void *arg)
 {
-    torque_loop(align_rotor());
+    ESP_LOGI(TAG, "자이로 영점 측정 중 — 가만히 두세요");
+    float gx_bias = measure_gyro_bias();
+
+    ESP_LOGI(TAG, "영점 %.1f LSB. 똑바로 세워 잡으세요 (%d ms)", gx_bias, SETPOINT_MS);
+    float setpoint = measure_setpoint(gx_bias);
+
+#if DRIVE_MOTOR
+    float offset = align_rotor();
+#else
+    float offset = 0.0f;   // 모터를 안 돌리므로 커뮤테이션 정렬이 필요 없다
+#endif
+
+    ESP_LOGI(TAG, "기준 각도 %.1f도, 구동 %s", setpoint, DRIVE_MOTOR ? "ON" : "OFF(계측만)");
+    balance_loop(offset, gx_bias, setpoint);
 }
 
 // app_main(우선순위 1)이 그대로 로그 태스크가 된다. 제어보다 낮으므로 UART 를
@@ -249,7 +314,7 @@ void app_main(void)
     ESP_ERROR_CHECK(mpu6050_init(I2C_PORT, MUX_CHANNELS, NUM_SENSORS));
 
     foc_init();
-    foc_enable(true);
+    foc_enable(DRIVE_MOTOR);
 
     s_stats_q = xQueueCreate(1, sizeof(stats_msg_t));
     ESP_ERROR_CHECK(s_stats_q ? ESP_OK : ESP_ERR_NO_MEM);
@@ -260,7 +325,7 @@ void app_main(void)
     stats_msg_t msg;
     while (1) {
         if (xQueueReceive(s_stats_q, &msg, portMAX_DELAY) == pdTRUE) {
-            stats_print(&msg.st, msg.wheel_vel);
+            stats_print(&msg);
         }
     }
 }

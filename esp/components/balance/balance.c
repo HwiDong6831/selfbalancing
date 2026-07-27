@@ -13,7 +13,7 @@
 // 토크모드 상태피드백
 #define BAL_K1          -2.0f                   // angle 게인 [V/deg] (부호: 실기 확인해 반대라 음수)
 #define BAL_K2          -0.4f                    // rate 게인 [V/(deg/s)] (부호 확인 후 추가, K1과 같은 부호계열)
-#define UQ_LIMIT        11.0f                    // uq 클램프 [V]
+#define UQ_LIMIT        3.0f                     // uq 클램프 [V]. 부호 확인용으로 낮춰 둔 값
 #define TILT_CUTOFF     35.0f                   // |angle| 초과 시 정지 [deg]
 #define DEADBAND        1.0f                    // |error| < 이 값이면 각도항 무시 [deg]
 
