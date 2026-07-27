@@ -7,6 +7,7 @@
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/i2c.h"
@@ -45,6 +46,12 @@
 
 #define STAT_US        1000000
 
+// 로그 출력(190자 @115200 = 16.5ms)이 커뮤테이션을 멈추지 않도록 제어를 별도 태스크로
+// 뺀다. 우선순위가 높으면 로그 태스크가 UART 를 기다리는 중이어도 즉시 뺏어온다.
+#define CTRL_PRIO      10
+#define CTRL_STACK     4096
+#define CTRL_CORE      0
+
 static const char *TAG = "MAIN";
 
 // 제어에 쓰는 건 0 번뿐이다. 나머지 둘은 표시용으로 나중에 붙인다.
@@ -60,6 +67,13 @@ typedef struct {
     float    d_max;         // 최대 각도 변화 [rad]
     int64_t  d_max_dt_us;   // 그때의 루프 주기
 } stats_t;
+
+typedef struct {
+    stats_t st;
+    float   wheel_vel;
+} stats_msg_t;
+
+static QueueHandle_t s_stats_q;   // 길이 1. 제어 루프는 덮어쓰기만 하고 대기하지 않는다
 
 static void i2c_bus_init(void)
 {
@@ -96,7 +110,6 @@ static void stats_add(stats_t *st, float d, float dt, int64_t dt_us)
 /*
  * 최대 각도 변화가 그 순간 물리적으로 가능한 값(dt × 휠속도)의 몇 배인지 같이 찍는다.
  * 1.0 근처면 정상이고, 크게 넘으면 엔코더가 틀린 값을 준 것이다.
- * 이 출력 자체가 8ms 가량 커뮤테이션을 멈추므로 짧게 유지한다.
  */
 static void stats_print(const stats_t *st, float wheel_vel)
 {
@@ -213,7 +226,8 @@ static void torque_loop(float offset)
 
         if (now - last_stat >= STAT_US) {
             last_stat = now;
-            stats_print(&st, wheel_vel);
+            stats_msg_t msg = { .st = st, .wheel_vel = wheel_vel };
+            xQueueOverwrite(s_stats_q, &msg);
             st = (stats_t){0};
         }
 
@@ -221,6 +235,13 @@ static void torque_loop(float offset)
     }
 }
 
+static void control_task(void *arg)
+{
+    torque_loop(align_rotor());
+}
+
+// app_main(우선순위 1)이 그대로 로그 태스크가 된다. 제어보다 낮으므로 UART 를
+// 기다리는 중에도 제어 루프가 언제든 뺏어간다.
 void app_main(void)
 {
     i2c_bus_init();
@@ -230,5 +251,16 @@ void app_main(void)
     foc_init();
     foc_enable(true);
 
-    torque_loop(align_rotor());
+    s_stats_q = xQueueCreate(1, sizeof(stats_msg_t));
+    ESP_ERROR_CHECK(s_stats_q ? ESP_OK : ESP_ERR_NO_MEM);
+
+    xTaskCreatePinnedToCore(control_task, "control",
+                            CTRL_STACK, NULL, CTRL_PRIO, NULL, CTRL_CORE);
+
+    stats_msg_t msg;
+    while (1) {
+        if (xQueueReceive(s_stats_q, &msg, portMAX_DELAY) == pdTRUE) {
+            stats_print(&msg.st, msg.wheel_vel);
+        }
+    }
 }
