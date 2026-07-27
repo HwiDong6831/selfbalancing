@@ -106,9 +106,21 @@ void foc_enable(bool on)
 }
 
 
-float foc_align(float align_angle){
+float foc_align(float angle_fwd, float angle_rev)
+{
     // d축 정렬 시 회전자 전기각 0°. angle_el = PP·(now_angle - align_angle) 되도록 음수 offset.
-    return -align_angle * POLE_PAIRS;
+    // 양 끝 모두 전기각 0 지점이라 같은 식이 성립한다.
+    float a = -angle_fwd * POLE_PAIRS;
+    float b = -angle_rev * POLE_PAIRS;
+
+    // 2π 경계를 넘어도 되도록 단위벡터로 평균낸다.
+    float off  = atan2f(sinf(a) + sinf(b), cosf(a) + cosf(b));
+    float diff = atan2f(sinf(a - b), cosf(a - b));   // 정렬 편향의 2배. 스윕 검증용
+
+    ESP_LOGI("FOC", "정렬 오프셋 %.1f도 (정/역 편차 %.1f도)",
+             off * 180.0f / (float)M_PI, diff * 180.0f / (float)M_PI);
+
+    return off;
 }
 
 // 

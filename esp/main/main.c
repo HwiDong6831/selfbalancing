@@ -25,8 +25,13 @@
 #define FLIP_US        5000000     // 회전 방향 유지 시간
 #define VEL_LPF        0.2f
 
+#define LAG_COMP       1.0f        // 커뮤테이션 지연 보상. 1.0 = 한 루프치, 0.0 = 보상 없음
+
 #define ALIGN_UD_V     2.0f
-#define ALIGN_HOLD_MS  1000
+#define ALIGN_HOLD_MS  1000        // 회전자를 전기각 0 으로 끌어오는 대기
+#define ALIGN_SWEEP_MS 1000        // 한 방향 스윕 시간
+#define ALIGN_STEPS    200         // 스텝당 전기각 1.8도
+#define ALIGN_SAMPLES  16          // 끝점 각도 평균 샘플 수
 
 /*
  * 엔코더 손상 판정 상한 = ENC_MAX_VEL × dt + ENC_BAD_FLOOR [rad].
@@ -109,27 +114,49 @@ static void stats_print(const stats_t *st, float wheel_vel)
              d_max_deg, (explain > 0.01f) ? d_max_deg / explain : 0.0f);
 }
 
+// 엔코더 각도 평균. 0/2π 경계를 넘어도 되도록 단위벡터로 더한다.
+static float read_angle_avg(void)
+{
+    float sum_s = 0.0f, sum_c = 0.0f;
+
+    for (int i = 0; i < ALIGN_SAMPLES; i++) {
+        float a;
+        if (encoder_read_angle(&a) == ESP_OK) {
+            sum_s += sinf(a);
+            sum_c += cosf(a);
+        }
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    return atan2f(sum_s, sum_c);
+}
+
 /*
- * d축에 전압을 걸어 회전자를 전기각 0 으로 끌어온 뒤 그때의 기계각을 잰다.
- * 극쌍이 7 이라 안정 위치가 7 군데지만 전기적으로는 같은 자리라 어디에 서든 된다.
- *
- * 한 방향으로만 끌어오므로 코깅 편향이 오프셋에 남는다. 그 탓에 정/역 최고속이
- * 달라지고 부팅마다 값이 바뀐다. 미해결.
+ * 전기각을 0 → 2π → 0 으로 왕복시키며 양 끝에서 기계각을 잰다.
+ * 가만히 끌어당기기만 하면 정지마찰 때문에 회전자가 끝까지 안 간다. 끌고 지나가야 한다.
  */
 static float align_rotor(void)
 {
+    const float step     = 2.0f * (float)M_PI / ALIGN_STEPS;
+    const int   dwell_ms = ALIGN_SWEEP_MS / ALIGN_STEPS;
+
     foc_set_phase_voltage(ALIGN_UD_V, 0.0f, 0.0f);
     vTaskDelay(pdMS_TO_TICKS(ALIGN_HOLD_MS));
 
-    float a = 0.0f;
-    ESP_ERROR_CHECK(encoder_read_angle(&a));
+    for (int i = 1; i <= ALIGN_STEPS; i++) {
+        foc_set_phase_voltage(ALIGN_UD_V, 0.0f, i * step);
+        vTaskDelay(pdMS_TO_TICKS(dwell_ms));
+    }
+    float angle_fwd = read_angle_avg();
+
+    for (int i = ALIGN_STEPS - 1; i >= 0; i--) {
+        foc_set_phase_voltage(ALIGN_UD_V, 0.0f, i * step);
+        vTaskDelay(pdMS_TO_TICKS(dwell_ms));
+    }
+    float angle_rev = read_angle_avg();
 
     foc_set_phase_voltage(0.0f, 0.0f, 0.0f);   // 물고 있으면 DC 가 계속 흐른다
 
-    float offset = foc_align(a);
-    ESP_LOGI(TAG, "정렬: 기계각 %.1f도 → 오프셋 %.1f도",
-             a * 180.0f / (float)M_PI, offset * 180.0f / (float)M_PI);
-    return offset;
+    return foc_align(angle_fwd, angle_rev);
 }
 
 static void torque_loop(float offset)
@@ -174,7 +201,14 @@ static void torque_loop(float offset)
             wheel_vel  = (1.0f - VEL_LPF) * wheel_vel + VEL_LPF * (d / dt);
             prev_angle = angle;
 
-            foc_apply_torque(dir * TEST_UQ, angle, offset);
+            // 읽은 위치가 아니라 다음 갱신 시점의 예상 위치에 자계를 세운다.
+            // 상한은 wheel_vel 이 튀어도 벡터가 날아가지 않게 하려는 것이다.
+            float adv     = LAG_COMP * wheel_vel * dt;
+            float adv_max = ENC_MAX_VEL * dt;
+            if (adv >  adv_max) adv =  adv_max;
+            if (adv < -adv_max) adv = -adv_max;
+
+            foc_apply_torque(dir * TEST_UQ, angle + adv, offset);
         }
 
         if (now - last_stat >= STAT_US) {

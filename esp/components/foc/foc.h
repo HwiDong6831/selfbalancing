@@ -12,7 +12,8 @@ void foc_init(void);
 // 드라이버 enable/disable.
 void foc_enable(bool on);
 
-float foc_align(float align_angle);
+// 정렬 오프셋 계산. 정·역 스윕 끝에서 각각 잰 기계각을 넘기면 평균내 편향을 상쇄한다.
+float foc_align(float angle_fwd, float angle_rev);
 
 // 전압 벡터 → 3상 PWM duty
 // ud       : d축 전압 (0)
