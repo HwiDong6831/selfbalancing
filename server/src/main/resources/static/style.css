@@ -98,6 +98,23 @@ main {
 .sensor-card td.k:first-child { padding-left: 0; }
 .sensor-card td.v { text-align: right; width: 64px; white-space: pre; }
 
+/* voting 이력 */
+.vh-wrap { max-height: 240px; overflow: auto; background: #12161c; border-radius: 8px; }
+.vh {
+  width: 100%; border-collapse: collapse;
+  font-family: ui-monospace, Consolas, "Cascadia Mono", monospace;
+  font-size: .74rem; font-variant-numeric: tabular-nums; white-space: pre;
+}
+.vh th {
+  position: sticky; top: 0; background: #12161c;
+  color: var(--muted); font-weight: 500; text-align: left;
+  padding: 6px 10px; border-bottom: 1px solid var(--line);
+}
+.vh td { padding: 4px 10px; border-bottom: 1px solid #1b2027; }
+.vh tbody tr.vh-ok   td:nth-child(2) { color: var(--ok); }
+.vh tbody tr.vh-warn td:nth-child(2) { color: var(--warn); }
+.vh tbody tr.vh-fail td:nth-child(2) { color: var(--fail); }
+
 /* 시리얼 로그 */
 .log-opt { margin-left: auto; font-size: .72rem; color: var(--muted); font-weight: 400; display: flex; align-items: center; gap: 4px; }
 .log-btn {
