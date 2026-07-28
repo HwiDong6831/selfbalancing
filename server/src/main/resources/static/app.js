@@ -131,62 +131,17 @@ function render(frame) {
   const v = frame.voting || {};
   const vr = $("vote-result");
   vr.textContent = VOTE_LABEL[v.result] || v.result || "–";
-  vr.className = "badge badge--" + voteClass(v.result);
+  vr.className = "badge badge--" + (v.result === "ok" ? "ok" : v.result === "fail" ? "fail" : "warn");
   $("vote-detail").textContent =
     `used: [${(v.used || []).join(", ")}]　rejected: [${(v.rejected || []).join(", ")}]`;
 
   renderSensors(frame.sensors || []);
-  recordVote(frame);
   push(b);
-}
-
-/*
- * voting 이상 이력. 50Hz 로 다 남기면 못 보므로 상태가 바뀌는 순간만 남긴다.
- * 배제된 센서의 실제 값을 같이 남기는 게 핵심이다 — 비트 뒤집힘처럼 크게 튄 건지
- * 미세하게 어긋난 건지에 따라 원인 판단이 갈린다.
- */
-const VH_CAP = 100;
-let lastVote = null;
-
-$("vh-clear").onclick = () => { $("vh-body").textContent = ""; lastVote = null; };
-
-function recordVote(frame) {
-  const v = frame.voting || {};
-  if (!v.result || v.result === lastVote) return;
-  lastVote = v.result;
-
-  const rejected = v.rejected || [];
-  const bad = (frame.sensors || [])
-    .filter((s) => rejected.includes(s.ch))
-    .map((s) => `ch${s.ch} ${fmt(s.ay, 3)} ${fmt(s.az, 3)} ${fmt(s.gx, 1)}`)
-    .join("　") || "–";
-
-  const b = frame.balance || {};
-  const t = new Date();
-  const hhmmss = t.toTimeString().slice(0, 8) +
-                 "." + String(t.getMilliseconds()).padStart(3, "0");
-
-  const tr = document.createElement("tr");
-  tr.className = "vh-" + voteClass(v.result);
-  for (const text of [hhmmss, VOTE_LABEL[v.result] || v.result,
-                      rejected.length ? rejected.map((c) => "ch" + c).join(", ") : "–",
-                      bad, fmt(b.angle), fmt(b.uq)]) {
-    const td = document.createElement("td");
-    td.textContent = text;
-    tr.appendChild(td);
-  }
-
-  const body = $("vh-body");
-  body.insertBefore(tr, body.firstChild);   // 최신이 위
-  while (body.childElementCount > VH_CAP) body.removeChild(body.lastChild);
 }
 
 // 서버 계약은 영문 코드로 오고 화면에만 우리말로 바꾼다. CSS 클래스는 코드 그대로 쓴다.
 const FAULT_LABEL = { none: "정상", dropout: "끊김", freeze: "고정", drift: "드리프트" };
-const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", fail: "실패", "n/a": "판정 없음" };
-
-// degraded 와 n/a 는 둘 다 주의(warn). 배지와 이력 행이 같은 색을 쓰도록 한곳에서 정한다.
-const voteClass = (r) => (r === "ok" ? "ok" : r === "fail" ? "fail" : "warn");
+const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", fail: "실패", "n/a": "미구현" };
 
 function renderSensors(sensors) {
   const host = $("sensors");

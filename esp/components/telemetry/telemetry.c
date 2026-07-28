@@ -124,16 +124,6 @@ static const char *fault_name(telemetry_fault_t f)
     }
 }
 
-static const char *vote_name(telemetry_vote_t v)
-{
-    switch (v) {
-    case TELEMETRY_VOTE_OK:       return "ok";
-    case TELEMETRY_VOTE_DEGRADED: return "degraded";
-    case TELEMETRY_VOTE_FAIL:     return "fail";
-    default:                      return "n/a";
-    }
-}
-
 static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
 {
     int len = snprintf(buf, n,
@@ -150,19 +140,12 @@ static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
             fin(s->gx), fin(s->gy), fin(s->gz), fault_name(s->fault));
     }
 
-    // 채택/배제 채널 번호를 JSON 배열 본문으로. 최대 "0,1,6".
-    char used[16] = "", rejected[16] = "";
-    for (int i = 0; i < 3; i++) {
-        char  *dst = f->vote_used[i] ? used : rejected;
-        size_t at  = strlen(dst);
-        snprintf(dst + at, sizeof(used) - at, "%s%d", at ? "," : "", f->sensors[i].ch);
-    }
-
+    // voting 미구현. "ok" 로 두면 대시보드에 정상으로 보여 오해를 부른다.
     len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
-        "],\"voting\":{\"result\":\"%s\",\"used\":[%s],\"rejected\":[%s]},"
+        "],\"voting\":{\"result\":\"n/a\",\"used\":[%d,%d,%d],\"rejected\":[]},"
         "\"balance\":{\"angle\":%.2f,\"rate\":%.2f,\"setpoint\":%.2f,\"uq\":%.3f},"
         "\"encoder\":{\"angle\":%.2f}}",
-        vote_name(f->vote), used, rejected,
+        f->sensors[0].ch, f->sensors[1].ch, f->sensors[2].ch,
         fin(f->angle), fin(f->rate), fin(f->setpoint), fin(f->uq),
         fin(f->enc_angle));
 

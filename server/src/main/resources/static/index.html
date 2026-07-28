@@ -31,27 +31,6 @@
       <div id="vote-detail" class="vote-detail">used: –　rejected: –</div>
     </section>
 
-    <!-- voting 이상 이력 (상태가 바뀌는 순간만 기록) -->
-    <section class="panel panel--wide">
-      <h2>
-        Voting 이력
-        <span class="unit">상태가 바뀔 때만 기록</span>
-        <button type="button" id="vh-clear" class="log-btn">지우기</button>
-      </h2>
-      <div class="vh-wrap">
-        <table class="vh">
-          <thead>
-            <tr>
-              <th>시각</th><th>상태</th><th>배제</th>
-              <th>배제된 센서 값 (ay / az / gx)</th>
-              <th>angle</th><th>uq</th>
-            </tr>
-          </thead>
-          <tbody id="vh-body"></tbody>
-        </table>
-      </div>
-    </section>
-
     <!-- 실시간 차트 -->
     <section class="panel panel--wide">
       <h2>실시간 (angle / rate / uq)</h2>
