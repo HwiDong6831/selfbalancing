@@ -35,8 +35,9 @@ body {
 .topbar h1 { font-size: 1.05rem; margin: 0; }
 
 .conn { font-size: .8rem; padding: 4px 10px; border-radius: 999px; font-weight: 600; }
-.conn--on  { background: rgba(46,160,67,.15);  color: var(--ok);  }
-.conn--off { background: rgba(248,81,73,.15);  color: var(--fail); }
+.conn--on   { background: rgba(46,160,67,.15);  color: var(--ok);  }
+.conn--warn { background: rgba(210,153,34,.15); color: var(--warn); }
+.conn--off  { background: rgba(248,81,73,.15);  color: var(--fail); }
 
 main {
   display: grid;

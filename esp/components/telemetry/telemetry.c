@@ -116,6 +116,14 @@ static float fin(float v)
     return isfinite(v) ? v : 0.0f;
 }
 
+static const char *fault_name(telemetry_fault_t f)
+{
+    switch (f) {
+    case TELEMETRY_FAULT_DROPOUT: return "dropout";
+    default:                      return "none";
+    }
+}
+
 static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
 {
     int len = snprintf(buf, n,
@@ -126,15 +134,15 @@ static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
         const telemetry_sensor_t *s = &f->sensors[i];
         len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
             "%s{\"ch\":%d,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,"
-            "\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"fault\":\"none\"}",
+            "\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"fault\":\"%s\"}",
             (i ? "," : ""), s->ch,
             fin(s->ax), fin(s->ay), fin(s->az),
-            fin(s->gx), fin(s->gy), fin(s->gz));
+            fin(s->gx), fin(s->gy), fin(s->gz), fault_name(s->fault));
     }
 
-    // voting 구현 전이라 고정값
+    // voting 미구현. "ok" 로 두면 대시보드에 정상으로 보여 오해를 부른다.
     len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
-        "],\"voting\":{\"result\":\"ok\",\"used\":[%d,%d,%d],\"rejected\":[]},"
+        "],\"voting\":{\"result\":\"n/a\",\"used\":[%d,%d,%d],\"rejected\":[]},"
         "\"balance\":{\"angle\":%.2f,\"rate\":%.2f,\"setpoint\":%.2f,\"uq\":%.3f},"
         "\"encoder\":{\"angle\":%.2f}}",
         f->sensors[0].ch, f->sensors[1].ch, f->sensors[2].ch,

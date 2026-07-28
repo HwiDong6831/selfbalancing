@@ -16,13 +16,15 @@
 #include "mpu6050.h"
 #include "foc.h"
 #include "balance.h"
+#include "telemetry.h"
+#include "secrets.h"
 
 #define I2C_PORT       I2C_NUM_0
 #define PIN_SDA        16
 #define PIN_SCL        17
 #define I2C_FREQ_HZ    100000
 
-#define LOOP_PERIOD_MS 1           // 여기에 MPU 읽기 시간이 더해져 실제로는 약 250Hz
+#define LOOP_PERIOD_MS 1           // 여기에 MPU 3개 읽기가 더해져 실제로는 약 165Hz
 #define VEL_LPF        0.2f
 
 /*
@@ -63,9 +65,13 @@
 
 static const char *TAG = "MAIN";
 
-// 제어에 쓰는 건 0 번뿐이다. 나머지 둘은 표시용으로 나중에 붙인다.
-static const int MUX_CHANNELS[3] = {0, 1, 6};
-static const int NUM_SENSORS     = 3;
+// 제어에 쓰는 건 0 번뿐이다. 나머지 둘은 대시보드 표시용으로 읽는다.
+#define NUM_SENSORS    3
+static const int MUX_CHANNELS[NUM_SENSORS] = {0, 1, 6};
+
+// ACCEL_CONFIG / GYRO_CONFIG 를 안 건드리므로 리셋 기본값 ±2g, ±250도/s.
+#define ACC_LSB_PER_G     16384.0f
+#define GYRO_LSB_PER_DPS  131.0f
 
 // 1초치 계측. 루프 주기가 바뀌면 "초당 몇 회" 는 비교가 안 되므로 비율로 본다.
 typedef struct {
@@ -132,11 +138,14 @@ static void stats_print(const stats_msg_t *m)
 
     unsigned long hz = m->win_us ? (unsigned long)(st->loops * 1000000LL / m->win_us) : 0;
 
+    // MPU 는 한 루프에 NUM_SENSORS 번 읽으므로 실패율 분모도 그만큼이다.
+    uint32_t reads = st->loops * NUM_SENSORS;
+
     ESP_LOGI(TAG, "loop %luHz  각도 %6.1f도  각속도 %7.1f도/s  uq %6.2fV  "
                   "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상 %lu  최대변화 %.1f도(%.1f배)",
              hz, m->angle, m->rate, m->uq, m->wheel_vel,
              (unsigned long)st->mpu_fail,
-             st->loops ? 100.0f * st->mpu_fail / st->loops : 0.0f,
+             reads ? 100.0f * st->mpu_fail / reads : 0.0f,
              (unsigned long)st->enc_bad,
              d_max_deg, (explain > 0.01f) ? d_max_deg / explain : 0.0f);
 }
@@ -227,6 +236,33 @@ static float measure_setpoint(float gx_bias)
     return angle;
 }
 
+// 대시보드로 한 프레임 보낸다. telemetry_publish 는 논블로킹이라 제어 루프에서 불러도 된다.
+static void publish_frame(const int16_t a[][3], const int16_t g[][3],
+                          const telemetry_fault_t *fault,
+                          float tilt, float rate, float setpoint,
+                          float uq, float enc_rad)
+{
+    telemetry_frame_t f = {
+        .angle     = tilt,
+        .rate      = rate,
+        .setpoint  = setpoint,
+        .uq        = uq,
+        .enc_angle = enc_rad * (180.0f / (float)M_PI),
+    };
+
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        f.sensors[i].ch    = MUX_CHANNELS[i];
+        f.sensors[i].fault = fault[i];
+        f.sensors[i].ax = a[i][0] / ACC_LSB_PER_G;
+        f.sensors[i].ay = a[i][1] / ACC_LSB_PER_G;
+        f.sensors[i].az = a[i][2] / ACC_LSB_PER_G;
+        f.sensors[i].gx = g[i][0] / GYRO_LSB_PER_DPS;
+        f.sensors[i].gy = g[i][1] / GYRO_LSB_PER_DPS;
+        f.sensors[i].gz = g[i][2] / GYRO_LSB_PER_DPS;
+    }
+    telemetry_publish(&f);
+}
+
 static void balance_loop(float offset, float gx_bias, float setpoint)
 {
     int64_t now       = esp_timer_get_time();
@@ -235,7 +271,8 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
     stats_t st = {0};
     float   wheel_vel = 0.0f, prev_angle = 0.0f;
     float   tilt = 0.0f, rate = 0.0f, uq = 0.0f;
-    int16_t ax, ay, az, gx, gy, gz;
+    int16_t a[NUM_SENSORS][3], g[NUM_SENSORS][3];   // [채널][x,y,z]
+    telemetry_fault_t fault[NUM_SENSORS] = {0};
 
     encoder_read_angle(&prev_angle);
 
@@ -246,12 +283,25 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
         prev_time = now;
         st.loops++;
 
+        // 제어는 채널 0 만 쓰고 나머지 둘은 대시보드용이다. 한 번에 약 1ms 씩 더 든다.
         // 실패 1회는 I2C 타임아웃 10ms 라 반드시 세어야 한다.
-        if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az,
-                                    &gx, &gy, &gz) != ESP_OK) {
-            st.mpu_fail++;
-        } else {
-            tilt = balance_estimate_angle(ay, az, gx, gx_bias, dt, &rate) - setpoint;
+        for (int i = 0; i < NUM_SENSORS; i++) {
+            if (mpu6050_read_accel_gyro(MUX_CHANNELS[i],
+                                        &a[i][0], &a[i][1], &a[i][2],
+                                        &g[i][0], &g[i][1], &g[i][2]) != ESP_OK) {
+                st.mpu_fail++;
+                fault[i] = TELEMETRY_FAULT_DROPOUT;
+                a[i][0] = a[i][1] = a[i][2] = 0;
+                g[i][0] = g[i][1] = g[i][2] = 0;
+            } else {
+                fault[i] = TELEMETRY_FAULT_NONE;
+            }
+        }
+        bool ch0_ok = (fault[0] == TELEMETRY_FAULT_NONE);
+
+        if (ch0_ok) {
+            tilt = balance_estimate_angle(a[0][1], a[0][2], g[0][0],
+                                          gx_bias, dt, &rate) - setpoint;
             uq   = balance_torque(tilt, rate, wheel_vel);
         }
 
@@ -277,6 +327,8 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
             // DRIVE_MOTOR 0 이면 EN 이 꺼져 있어 duty 를 써도 출력이 나가지 않는다.
             foc_apply_torque(uq, angle + adv, offset);
         }
+
+        publish_frame(a, g, fault, tilt, rate, setpoint, uq, prev_angle);
 
         if (now - last_stat >= STAT_US) {
             stats_msg_t msg = { .st = st, .win_us = now - last_stat,
@@ -313,6 +365,15 @@ static void control_task(void *arg)
 // 기다리는 중에도 제어 루프가 언제든 뺏어간다.
 void app_main(void)
 {
+    // 가장 먼저. 이후의 초기화 로그(자이로 영점, 정렬 오프셋)까지 웹으로 실린다.
+    // WiFi 연결까지 블록하므로 공유기가 없으면 여기서 멈춘다.
+    static const telemetry_config_t tele_cfg = {
+        .wifi_ssid     = WIFI_SSID,
+        .wifi_password = WIFI_PASSWORD,
+        .server_uri    = SERVER_WS_URI,
+    };
+    ESP_ERROR_CHECK(telemetry_start(&tele_cfg));
+
     i2c_bus_init();
     ESP_ERROR_CHECK(encoder_init(I2C_PORT));
     ESP_ERROR_CHECK(mpu6050_init(I2C_PORT, MUX_CHANNELS, NUM_SENSORS));

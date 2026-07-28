@@ -9,24 +9,46 @@ function wsUrl() {
   return `${proto}://${location.host}/ws/telemetry`;
 }
 
+/*
+ * 연결은 두 개다.  브라우저 ──(/ws/telemetry)── 서버 ──(/ws/esp)── ESP32
+ * 소켓만 보면 ESP 가 빠져도 "연결됨" 으로 남으므로 수신 여부를 같이 본다.
+ * 로그도 ESP 에서 오니 생존 신호로 센다 (부팅 직후 6초는 로그만 오고 프레임이 없다).
+ */
+const ALIVE_TIMEOUT_MS = 1000;
+let sockOpen = false;
+let lastRxAt = 0;
+
 function connect() {
   ws = new WebSocket(wsUrl());
-  ws.onopen = () => setConn(true);
-  ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
+  ws.onopen = () => { sockOpen = true; updateConn(); };
+  ws.onclose = () => { sockOpen = false; updateConn(); setTimeout(connect, 1000); };
   ws.onerror = () => ws.close();
   ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch { return; }
+    lastRxAt = Date.now();
+    updateConn();
     // 프레임과 시리얼 로그가 같은 소켓으로 온다
     if (typeof msg.log === "string") appendLog(msg.log);
     else render(msg);
   };
 }
 
-function setConn(on) {
-  connEl.textContent = on ? "연결됨" : "연결 끊김";
-  connEl.className = "conn " + (on ? "conn--on" : "conn--off");
+function updateConn() {
+  let cls, text;
+  if (!sockOpen) {
+    cls = "off";  text = "서버 연결 끊김";
+  } else if (Date.now() - lastRxAt > ALIVE_TIMEOUT_MS) {
+    cls = "warn"; text = "ESP 응답 없음";
+  } else {
+    cls = "on";   text = "연결됨";
+  }
+  connEl.textContent = text;
+  connEl.className = "conn conn--" + cls;
 }
+
+// 수신이 끊긴 것은 이벤트가 아니라 시간 경과로만 알 수 있다
+setInterval(updateConn, 250);
 
 // 차트: angle/rate/uq 링버퍼
 const CAP = 240;
@@ -108,7 +130,7 @@ function render(frame) {
 
   const v = frame.voting || {};
   const vr = $("vote-result");
-  vr.textContent = v.result || "–";
+  vr.textContent = VOTE_LABEL[v.result] || v.result || "–";
   vr.className = "badge badge--" + (v.result === "ok" ? "ok" : v.result === "fail" ? "fail" : "warn");
   $("vote-detail").textContent =
     `used: [${(v.used || []).join(", ")}]　rejected: [${(v.rejected || []).join(", ")}]`;
@@ -116,6 +138,10 @@ function render(frame) {
   renderSensors(frame.sensors || []);
   push(b);
 }
+
+// 서버 계약은 영문 코드로 오고 화면에만 우리말로 바꾼다. CSS 클래스는 코드 그대로 쓴다.
+const FAULT_LABEL = { none: "정상", dropout: "끊김", freeze: "고정", drift: "드리프트" };
+const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", fail: "실패", "n/a": "미구현" };
 
 function renderSensors(sensors) {
   const host = $("sensors");
@@ -135,8 +161,9 @@ function renderSensors(sensors) {
     const c = host.children[i];
     c.querySelector(".ch").textContent = "ch " + s.ch;
     const f = c.querySelector(".fault");
-    f.textContent = s.fault;
-    f.className = "fault fault--" + s.fault;
+    const code = s.fault || "none";
+    f.textContent = FAULT_LABEL[code] || code;
+    f.className = "fault fault--" + code;
     // 가속도는 g(±2), 각속도는 deg/s(±250) 라 유효자리가 다르다.
     for (const k of ["ax", "ay", "az"]) c.querySelector("." + k).textContent = fmt(s[k], 3);
     for (const k of ["gx", "gy", "gz"]) c.querySelector("." + k).textContent = fmt(s[k], 1);

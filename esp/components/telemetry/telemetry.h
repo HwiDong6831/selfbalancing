@@ -12,10 +12,18 @@ typedef struct {
     const char *server_uri;     // ws://<서버 LAN IP>:8080/ws/esp
 } telemetry_config_t;
 
+// 서버 계약은 none|dropout|freeze|drift 네 가지지만, 판정 로직이 있는 건 dropout 뿐이다.
+// freeze(값 고정)·drift(서서히 틀어짐)는 결함 주입 검증에서 붙인다.
+typedef enum {
+    TELEMETRY_FAULT_NONE = 0,
+    TELEMETRY_FAULT_DROPOUT,    // 읽기 실패
+} telemetry_fault_t;
+
 typedef struct {
     int   ch;                   // TCA9548A mux 채널
     float ax, ay, az;           // [g]
     float gx, gy, gz;           // [deg/s]
+    telemetry_fault_t fault;
 } telemetry_sensor_t;
 
 // 서버의 SensorFrame record 와 1:1 대응.
