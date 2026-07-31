@@ -30,6 +30,14 @@ static const char *TAG = "TELE";
 #define LOG_DRAIN_MAX   8
 
 #define WIFI_GOT_IP_BIT BIT0
+#define WIFI_TX_POWER   44      // 0.25dBm 단위 = 11dBm
+
+/*
+ * 이 시간 넘게 연결이 안 돌아오면 클라이언트를 통째로 재시작한다.
+ * 자동 재접속(reconnect_timeout_ms 2초)은 클라이언트가 살아 있을 때만 돈다. 전송 중
+ * 소켓이 사라지면 "already stop" 으로 굳어 재접속이 시작조차 안 된다.
+ */
+#define WS_DEAD_MS      5000
 
 static telemetry_config_t       s_cfg;
 static EventGroupHandle_t       s_wifi_events;
@@ -89,6 +97,13 @@ static esp_err_t wifi_start_sta(void)
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    /*
+     * 송신 순간 전류가 센서 전원을 끌어내려 엔코더가 0 을 뱉고 I2C 가 깨졌다 (2026-07-29).
+     * 단위 0.25dBm, 범위 8~84. 기본 80(20dBm) → 44(11dBm).
+     * 공유기가 가까워(rssi -52) 이 출력으로도 충분하다. 접속이 불안하면 올린다.
+     */
+    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(WIFI_TX_POWER));
+
     ESP_LOGI(TAG, "WiFi 연결 대기: %s", s_cfg.wifi_ssid);
     xEventGroupWaitBits(s_wifi_events, WIFI_GOT_IP_BIT,
                         pdFALSE, pdTRUE, portMAX_DELAY);
@@ -104,6 +119,10 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
         break;
     case WEBSOCKET_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "서버 연결 끊김 (자동 재시도)");
+        break;
+    case WEBSOCKET_EVENT_ERROR:
+        // 재시작은 telemetry_task 가 한다. 여기는 WS 자신의 태스크라 스스로를 못 멈춘다.
+        ESP_LOGW(TAG, "WS 오류");
         break;
     default:
         break;
@@ -213,13 +232,17 @@ static void send_pending_logs(void)
         len += (int)strlen(s_json + len);
         len += snprintf(s_json + len, sizeof(s_json) - len, "\"}");
 
-        esp_websocket_client_send_text(s_ws, s_json, len, pdMS_TO_TICKS(100));
+        // 실패하면 남은 것도 실패한다. 계속 밀어넣으면 그 에러 로그가 큐를 다시 채운다.
+        if (esp_websocket_client_send_text(s_ws, s_json, len, pdMS_TO_TICKS(100)) < 0) {
+            return;
+        }
     }
 }
 
 static void telemetry_task(void *arg)
 {
     telemetry_frame_t frame;
+    int64_t last_conn = esp_timer_get_time();
 
     while (1) {
         // 로그도 흘려보내야 하므로 무한 대기 대신 타임아웃
@@ -228,8 +251,15 @@ static void telemetry_task(void *arg)
         // 미연결이어도 로그 큐는 비우지 않는다. WS 연결 전 부팅 로그가
         // 살아남아 연결 직후 한꺼번에 올라간다.
         if (!esp_websocket_client_is_connected(s_ws)) {
+            if (esp_timer_get_time() - last_conn > WS_DEAD_MS * 1000LL) {
+                ESP_LOGW(TAG, "WS 응답 없음 %d초 — 재시작", WS_DEAD_MS / 1000);
+                esp_websocket_client_stop(s_ws);
+                esp_websocket_client_start(s_ws);
+                last_conn = esp_timer_get_time();
+            }
             continue;
         }
+        last_conn = esp_timer_get_time();
 
         if (has_frame) {
             int len = build_json(&frame, s_json, sizeof(s_json));
