@@ -22,9 +22,13 @@
 #define I2C_PORT       I2C_NUM_0
 #define PIN_SDA        16
 #define PIN_SCL        17
-#define I2C_FREQ_HZ    100000
+// 100kHz 는 드라이버 이관(2026-07-21) 때 딸려온 값이고 속도는 버스 멈춤과 무관했다.
+// 센서 3개를 읽는 지금은 버스에 신호가 떠 있는 시간을 줄이는 편이 낫다. 부품 3종 모두 지원.
+#define I2C_FREQ_HZ    400000
 
-#define LOOP_PERIOD_MS 1           // 여기에 MPU 3개 읽기가 더해져 실제로는 약 165Hz
+// 고정 주기 8ms = 125Hz. 400kHz 로 올린 뒤 그냥 두면 247Hz 까지 올라가는데, mux 전환
+// 횟수가 초당 2배가 되고 게인도 115Hz 기준으로 맞춘 값이라 주기를 고정한다.
+#define LOOP_PERIOD_MS 8
 #define VEL_LPF        0.2f
 
 /*
@@ -33,6 +37,12 @@
  * 때문이다. 게인·부호를 손대고 모터를 물리기 전에 0 으로 두고 로그부터 확인한다.
  */
 #define DRIVE_MOTOR    1
+
+// 0 = WiFi/텔레메트리를 아예 시작하지 않는다. 시리얼 로그만 남는다.
+#define USE_TELEMETRY  1
+
+// 대시보드 송신 간격 (30Hz). 루프마다 보내면 WiFi 송신 전류가 센서 전원을 흔든다.
+#define TELEMETRY_US   33000
 
 #define GYRO_CAL_N     200         // gx bias 평균 샘플 수 (5ms 간격 = 1초)
 #define SETPOINT_MS    2000        // 똑바로 세운 채 상보필터를 수렴시키는 시간
@@ -46,14 +56,23 @@
 #define ALIGN_SAMPLES  16          // 끝점 각도 평균 샘플 수
 
 /*
- * 엔코더 손상 판정 상한 = ENC_MAX_VEL × dt + ENC_BAD_FLOOR [rad].
+ * 엔코더 손상 판정 상한 = ENC_MAX_VEL × 경과시간 + ENC_BAD_FLOOR [rad].
  *
- * 휠 속도 추정치를 쓰면 안 된다. 걸러내는 로직이 없어 손상값이 그대로 추정치에
- * 들어가고, 오염된 추정치가 다시 상한을 무너뜨린다.
- * 실측 최고가 50 rad/s 이므로 80 을 상한으로 두면 정상값은 걸리지 않는다.
+ * 휠 속도 추정치를 쓰면 안 된다. 버린 동안 추정치가 얼어붙는데, 그 얼어붙은 값이 다시
+ * 상한을 좁혀 정상값까지 버리게 된다. 한번 잠기면 안 풀린다 (2026-07-29 실측: 정상값을
+ * 13루프 연속 버리고 커뮤테이션이 멈춰 급가속). 고정값이어야 시간이 갈수록 상한이 넓어져
+ * 스스로 풀린다.
+ * 실측 최고가 55 rad/s 이므로 80 을 상한으로 두면 정상값은 걸리지 않는다.
  */
 #define ENC_MAX_VEL    80.0f
 #define ENC_BAD_FLOOR  0.30f
+
+/*
+ * 휠 각가속도 상한 [rad/s^2]. 손상값이 상한을 통과해도 휠 속도가 한 번에 튀지 못하게 막는다.
+ * 버리는 게 아니라 깎는 것이라 커뮤테이션이 멈추지 않는다.
+ * 실측 최대 약 120 이므로 300 이면 정상 가속은 걸리지 않는다.
+ */
+#define WHEEL_MAX_ACC  300.0f
 
 #define STAT_US        100000      // 통계 창. 0.7초짜리 넘어짐을 보려면 10Hz 는 되어야 한다
 
@@ -67,7 +86,7 @@ static const char *TAG = "MAIN";
 
 // 제어에 쓰는 건 0 번뿐이다. 나머지 둘은 대시보드 표시용으로 읽는다.
 #define NUM_SENSORS    3
-static const int MUX_CHANNELS[NUM_SENSORS] = {0, 1, 6};
+static const int MUX_CHANNELS[NUM_SENSORS] = {5, 6, 7};
 
 // ACCEL_CONFIG / GYRO_CONFIG 를 안 건드리므로 리셋 기본값 ±2g, ±250도/s.
 #define ACC_LSB_PER_G     16384.0f
@@ -78,9 +97,10 @@ typedef struct {
     uint32_t loops;
     uint32_t enc_fail;
     uint32_t mpu_fail;
-    uint32_t enc_bad;       // 물리적으로 불가능한 각도 변화
+    uint32_t enc_bad;       // 물리적으로 불가능해 버린 각도 변화
+    uint16_t bad_raw;       // [진단] 마지막으로 버린 값의 엔코더 원본. 0/16383/그 외를 가른다
     float    d_max;         // 최대 각도 변화 [rad]
-    int64_t  d_max_dt_us;   // 그때의 루프 주기
+    float    d_max_span;    // 그때 직전 채택값 이후 경과 시간 [s]
 } stats_t;
 
 typedef struct {
@@ -117,13 +137,23 @@ static float angle_delta(float now, float prev)
     return d;
 }
 
-static void stats_add(stats_t *st, float d, float dt, int64_t dt_us)
+static void stats_add(stats_t *st, float d, float span)
 {
     if (fabsf(d) > st->d_max) {
-        st->d_max       = fabsf(d);
-        st->d_max_dt_us = dt_us;
+        st->d_max      = fabsf(d);
+        st->d_max_span = span;
     }
-    if (fabsf(d) > ENC_MAX_VEL * dt + ENC_BAD_FLOOR) st->enc_bad++;
+}
+
+/*
+ * 물리적으로 불가능한 각도 변화인가. span 은 마지막으로 채택한 값 이후 경과 시간이다.
+ *
+ * 루프 주기가 아니라 경과 시간을 쓰는 이유: 버린 뒤에는 다음 값이 두 루프치를 건너뛰므로,
+ * 한 루프 예산으로 재면 정상값도 걸려 연속 배제로 이어진다.
+ */
+static bool enc_implausible(float d, float span)
+{
+    return fabsf(d) > ENC_MAX_VEL * span + ENC_BAD_FLOOR;
 }
 
 /*
@@ -134,7 +164,7 @@ static void stats_print(const stats_msg_t *m)
 {
     const stats_t *st = &m->st;
     float d_max_deg = st->d_max * 180.0f / (float)M_PI;
-    float explain   = fabsf(m->wheel_vel) * (st->d_max_dt_us * 1e-6f) * 180.0f / (float)M_PI;
+    float explain   = fabsf(m->wheel_vel) * st->d_max_span * 180.0f / (float)M_PI;
 
     unsigned long hz = m->win_us ? (unsigned long)(st->loops * 1000000LL / m->win_us) : 0;
 
@@ -142,11 +172,11 @@ static void stats_print(const stats_msg_t *m)
     uint32_t reads = st->loops * NUM_SENSORS;
 
     ESP_LOGI(TAG, "loop %luHz  각도 %6.1f도  각속도 %7.1f도/s  uq %6.2fV  "
-                  "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상 %lu  최대변화 %.1f도(%.1f배)",
+                  "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상버림 %lu(raw %u)  최대변화 %.1f도(%.1f배)",
              hz, m->angle, m->rate, m->uq, m->wheel_vel,
              (unsigned long)st->mpu_fail,
              reads ? 100.0f * st->mpu_fail / reads : 0.0f,
-             (unsigned long)st->enc_bad,
+             (unsigned long)st->enc_bad, st->bad_raw,
              d_max_deg, (explain > 0.01f) ? d_max_deg / explain : 0.0f);
 }
 
@@ -266,15 +296,18 @@ static void publish_frame(const int16_t a[][3], const int16_t g[][3],
 static void balance_loop(float offset, float gx_bias, float setpoint)
 {
     int64_t now       = esp_timer_get_time();
-    int64_t prev_time = now, last_stat = now;
+    int64_t prev_time = now, last_stat = now, last_pub = now;
 
     stats_t st = {0};
     float   wheel_vel = 0.0f, prev_angle = 0.0f;
+    float   since_ok  = 0.0f;   // 마지막으로 채택한 엔코더 값 이후 경과 시간 [s]
     float   tilt = 0.0f, rate = 0.0f, uq = 0.0f;
     int16_t a[NUM_SENSORS][3], g[NUM_SENSORS][3];   // [채널][x,y,z]
     telemetry_fault_t fault[NUM_SENSORS] = {0};
 
     encoder_read_angle(&prev_angle);
+
+    TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
         now = esp_timer_get_time();
@@ -306,29 +339,55 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
         }
 
         float angle;
+        since_ok += dt;
         if (encoder_read_angle(&angle) != ESP_OK) {
             // 로그 금지: UART 블로킹이 커뮤테이션을 더 멈춘다.
             // 직전 전압 벡터를 그대로 두고 보정하지 않는다.
             st.enc_fail++;
         } else {
             float d = angle_delta(angle, prev_angle);
-            stats_add(&st, d, dt, dt_us);
+            stats_add(&st, d, since_ok);
 
-            wheel_vel  = (1.0f - VEL_LPF) * wheel_vel + VEL_LPF * (d / dt);
-            prev_angle = angle;
+            /*
+             * I2C 가 ESP_OK 를 줘도 값이 깨져 오는 경우가 있다. 그대로 쓰면 wheel_vel 이
+             * 한 번에 수십 rad/s 튀어 K3 가 uq 를 포화시키고, 깨진 각도로 자계를 세워
+             * 토크 방향까지 뒤집힌다 (2026-07-29 일지).
+             *
+             * 읽기 실패와 똑같이 다룬다 — 버리고 직전 전압 벡터를 유지한다.
+             * prev_angle 을 안 옮기므로 다음 정상값이 그대로 이어진다.
+             */
+            if (enc_implausible(d, since_ok)) {
+                st.enc_bad++;
+                // encoder_read_angle 의 역산. 16383 이면 엔코더 무응답, 0 이면 0 을 보낸 것.
+                st.bad_raw = (uint16_t)((2.0f * (float)M_PI - angle) *
+                                        (16384.0f / (2.0f * (float)M_PI)));
+            } else {
+                // 물리적으로 가능한 가속 범위로 측정값을 깎은 뒤 필터에 넣는다.
+                float meas = d / since_ok;
+                float step = WHEEL_MAX_ACC * since_ok;
+                if (meas > wheel_vel + step) meas = wheel_vel + step;
+                if (meas < wheel_vel - step) meas = wheel_vel - step;
 
-            // 읽은 위치가 아니라 다음 갱신 시점의 예상 위치에 자계를 세운다.
-            // 상한은 wheel_vel 이 튀어도 벡터가 날아가지 않게 하려는 것이다.
-            float adv     = LAG_COMP * wheel_vel * dt;
-            float adv_max = ENC_MAX_VEL * dt;
-            if (adv >  adv_max) adv =  adv_max;
-            if (adv < -adv_max) adv = -adv_max;
+                wheel_vel  = (1.0f - VEL_LPF) * wheel_vel + VEL_LPF * meas;
+                prev_angle = angle;
+                since_ok   = 0.0f;
 
-            // DRIVE_MOTOR 0 이면 EN 이 꺼져 있어 duty 를 써도 출력이 나가지 않는다.
-            foc_apply_torque(uq, angle + adv, offset);
+                // 읽은 위치가 아니라 다음 갱신 시점의 예상 위치에 자계를 세운다.
+                // 상한은 wheel_vel 이 튀어도 벡터가 날아가지 않게 하려는 것이다.
+                float adv     = LAG_COMP * wheel_vel * dt;
+                float adv_max = ENC_MAX_VEL * dt;
+                if (adv >  adv_max) adv =  adv_max;
+                if (adv < -adv_max) adv = -adv_max;
+
+                // DRIVE_MOTOR 0 이면 EN 이 꺼져 있어 duty 를 써도 출력이 나가지 않는다.
+                foc_apply_torque(uq, angle + adv, offset);
+            }
         }
 
-        publish_frame(a, g, fault, tilt, rate, setpoint, uq, prev_angle);
+        if (now - last_pub >= TELEMETRY_US) {
+            last_pub = now;
+            publish_frame(a, g, fault, tilt, rate, setpoint, uq, prev_angle);
+        }
 
         if (now - last_stat >= STAT_US) {
             stats_msg_t msg = { .st = st, .win_us = now - last_stat,
@@ -339,7 +398,8 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
             st = (stats_t){0};
         }
 
-        vTaskDelay(pdMS_TO_TICKS(LOOP_PERIOD_MS));
+        // 일한 시간과 무관하게 주기를 일정하게 유지한다 (vTaskDelay 면 일감만큼 밀린다)
+        xTaskDelayUntil(&last_wake, pdMS_TO_TICKS(LOOP_PERIOD_MS));
     }
 }
 
@@ -365,6 +425,7 @@ static void control_task(void *arg)
 // 기다리는 중에도 제어 루프가 언제든 뺏어간다.
 void app_main(void)
 {
+#if USE_TELEMETRY
     // 가장 먼저. 이후의 초기화 로그(자이로 영점, 정렬 오프셋)까지 웹으로 실린다.
     // WiFi 연결까지 블록하므로 공유기가 없으면 여기서 멈춘다.
     static const telemetry_config_t tele_cfg = {
@@ -373,6 +434,7 @@ void app_main(void)
         .server_uri    = SERVER_WS_URI,
     };
     ESP_ERROR_CHECK(telemetry_start(&tele_cfg));
+#endif
 
     i2c_bus_init();
     ESP_ERROR_CHECK(encoder_init(I2C_PORT));
