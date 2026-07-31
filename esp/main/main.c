@@ -171,13 +171,20 @@ static void stats_print(const stats_msg_t *m)
     // MPU 는 한 루프에 NUM_SENSORS 번 읽으므로 실패율 분모도 그만큼이다.
     uint32_t reads = st->loops * NUM_SENSORS;
 
+    // Z 카운트가 한 자리에 머물러야 한 바퀴 카운트가 맞는 것이다 (encoder.h 참조).
+    uint32_t z_n;
+    int      z_last;
+    encoder_get_z(&z_n, &z_last);
+
     ESP_LOGI(TAG, "loop %luHz  각도 %6.1f도  각속도 %7.1f도/s  uq %6.2fV  "
-                  "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상버림 %lu(raw %u)  최대변화 %.1f도(%.1f배)",
+                  "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상버림 %lu(raw %u)  최대변화 %.1f도(%.1f배)  "
+                  "카운트 %5d  Z %lu회(카운트 %d)",
              hz, m->angle, m->rate, m->uq, m->wheel_vel,
              (unsigned long)st->mpu_fail,
              reads ? 100.0f * st->mpu_fail / reads : 0.0f,
              (unsigned long)st->enc_bad, st->bad_raw,
-             d_max_deg, (explain > 0.01f) ? d_max_deg / explain : 0.0f);
+             d_max_deg, (explain > 0.01f) ? d_max_deg / explain : 0.0f,
+             encoder_get_count(), (unsigned long)z_n, z_last);
 }
 
 #if DRIVE_MOTOR
@@ -437,7 +444,7 @@ void app_main(void)
 #endif
 
     i2c_bus_init();
-    ESP_ERROR_CHECK(encoder_init(I2C_PORT));
+    ESP_ERROR_CHECK(encoder_init());
     ESP_ERROR_CHECK(mpu6050_init(I2C_PORT, MUX_CHANNELS, NUM_SENSORS));
 
     foc_init();
