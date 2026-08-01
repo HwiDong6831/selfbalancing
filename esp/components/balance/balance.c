@@ -20,7 +20,7 @@
  * 부호는 전부 실기에서 쟀다. 계산으로 유도해 두 번 틀렸다(2026-07-28 일지).
  */
 #define BAL_K1          -4.0f    // angle 게인 [V/deg]
-#define BAL_K2          -1.0f    // rate 게인 [V/(deg/s)]. 잡음이 들어오는 유일한 창구다
+#define BAL_K2          -1.2f    // rate 게인 [V/(deg/s)]. 잡음이 들어오는 유일한 창구다
 #define BAL_K3           0.3f    // 휠속도 게인 [V/(rad/s)]. K1/K2 와 부호가 반대다
 
 #define UQ_LIMIT        6.0f     // uq 클램프 [V]. foc.c 의 선형 한계(V_SUPPLY/2)를 3% 넘는다
