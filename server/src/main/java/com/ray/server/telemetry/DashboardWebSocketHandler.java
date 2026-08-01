@@ -1,5 +1,6 @@
 package com.ray.server.telemetry;
 
+import com.ray.server.dto.FaultCommand;
 import com.ray.server.dto.SensorFrame;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -24,9 +25,24 @@ public class DashboardWebSocketHandler extends TextWebSocketHandler implements T
 
     private final Set<WebSocketSession> sessions = new CopyOnWriteArraySet<>();
     private final ObjectMapper mapper;
+    private final CommandRelay relay;
 
-    public DashboardWebSocketHandler(ObjectMapper mapper) {
+    public DashboardWebSocketHandler(ObjectMapper mapper, CommandRelay relay) {
         this.mapper = mapper;
+        this.relay = relay;
+    }
+
+    /** 브라우저가 보내는 건 결함 주입 명령뿐이다. 그 외는 버린다. */
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) {
+        try {
+            FaultCommand cmd = mapper.readValue(message.getPayload(), FaultCommand.class);
+            if (cmd.isFault()) {
+                relay.apply(cmd);
+            }
+        } catch (JacksonException e) {
+            log.warn("dashboard command parse failed: {}", e.getOriginalMessage());
+        }
     }
 
     @Override

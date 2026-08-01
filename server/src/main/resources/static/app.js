@@ -136,13 +136,14 @@ function render(frame) {
   renderVote("gyro", v.gyro, chans);
 
   renderSensors(frame.sensors || []);
+  syncFaultRows(frame.sensors || []);
   recordVote(frame);
   push(b);
 }
 
 // 서버 계약은 영문 코드로 오고 화면에만 우리말로 바꾼다. CSS 클래스는 코드 그대로 쓴다.
 const FAULT_LABEL = { none: "정상", dropout: "끊김", freeze: "고정", drift: "드리프트" };
-const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", fail: "실패" };
+const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", single: "단일 센서", fail: "실패" };
 
 // 가속도·자이로 판정 한 덩이. 채널마다 카드 하나로 채택 여부를 색으로 보인다.
 function renderVote(kind, v, chans) {
@@ -320,6 +321,72 @@ function addRow(sig, result, vote, rejected, sensors, st) {
   const body = $("vh-" + sig);
   body.insertBefore(tr, body.firstChild);   // 최신이 위
   while (body.childElementCount > VH_CAP) body.removeChild(body.lastChild);
+}
+
+/*
+ * 결함 주입. 브라우저 → 서버 → ESP32 로 내려간다.
+ * 채널 목록은 프레임에 실려 오는 것으로 만든다 (펌웨어 5/6/7, 더미 0/1/6).
+ */
+const FI_MODES = [
+  ["none",    "정상"],
+  ["dropout", "누락"],
+  ["freeze",  "값 고정"],
+  ["drift",   "점진적 변형"],
+];
+const fiMode = new Map();   // ch → mode
+
+function sendFault(ch, mode) {
+  fiMode.set(ch, mode);
+  const rate = Number($(`fi-rate-${ch}`).value) || 0;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ cmd: "fault", ch, mode, rate }));
+  }
+  for (const b of document.querySelectorAll(`[data-fi-ch="${ch}"]`)) {
+    b.classList.toggle("is-on", b.dataset.fiMode === mode);
+  }
+}
+
+$("fi-clear").onclick = () => {
+  for (const ch of fiMode.keys()) sendFault(ch, "none");
+};
+
+function syncFaultRows(sensors) {
+  const host = $("fi-rows");
+  for (const s of sensors) {
+    if (fiMode.has(s.ch)) continue;
+    fiMode.set(s.ch, "none");
+
+    const row = document.createElement("div");
+    row.className = "fi-row";
+    row.innerHTML = `<span class="fi-ch">ch ${s.ch}</span>`;
+
+    for (const [mode, label] of FI_MODES) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "fi-btn" + (mode === "none" ? " is-on" : "");
+      b.textContent = label;
+      b.dataset.fiCh = s.ch;
+      b.dataset.fiMode = mode;
+      b.onclick = () => sendFault(s.ch, mode);
+      row.appendChild(b);
+    }
+
+    const rate = document.createElement("input");
+    rate.type = "number";
+    rate.id = `fi-rate-${s.ch}`;
+    rate.className = "fi-rate";
+    rate.value = "0.5";
+    rate.step = "0.1";
+    rate.min = "0";
+    rate.title = "점진적 변형 속도 — 초당 임계값의 몇 배";
+    // 속도만 바꿔도 이미 걸려 있는 drift 에 바로 반영되게 다시 보낸다
+    rate.onchange = () => {
+      if (fiMode.get(s.ch) === "drift") sendFault(s.ch, "drift");
+    };
+    row.append(rate, Object.assign(document.createElement("span"),
+                                   { className: "fi-unit", textContent: "배/초" }));
+    host.appendChild(row);
+  }
 }
 
 function renderSensors(sensors) {

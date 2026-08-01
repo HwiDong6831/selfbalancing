@@ -33,8 +33,20 @@ void voting_fuse(const int16_t v[VOTING_N][VOTING_AXIS_MAX], const bool valid[VO
         else         out->used[1] = out->used[2] = true;
         out->result = VOTING_DEGRADED;
     } else {
-        out->result = VOTING_FAIL;   // 짝이 0 또는 2개. 누가 맞는지 가릴 수 없다
-        return;
+        /*
+         * 짝이 0 또는 2개. 남은 하나가 유일한 데이터면 그걸 쓴다 — 값이 서로 어긋나
+         * 누가 맞는지 모르는 상황과, 읽을 게 하나뿐인 상황은 다르다.
+         */
+        int only = -1, n_valid = 0;
+        for (int i = 0; i < VOTING_N; i++) {
+            if (valid[i]) { n_valid++; only = i; }
+        }
+        if (n_valid != 1) {
+            out->result = VOTING_FAIL;
+            return;
+        }
+        out->used[only] = true;
+        out->result = VOTING_SINGLE;
     }
 
     int32_t sum[VOTING_AXIS_MAX] = {0};

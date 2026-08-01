@@ -20,7 +20,8 @@ class EspIngestHandlerTest {
     }
 
     private final RecordingSink sink = new RecordingSink();
-    private final EspIngestHandler handler = new EspIngestHandler(new ObjectMapper(), sink);
+    private final EspIngestHandler handler =
+            new EspIngestHandler(new ObjectMapper(), sink, new CommandRelay(new ObjectMapper()));
 
     @Test
     void logMessageGoesToPublishLog() {

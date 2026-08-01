@@ -60,4 +60,37 @@ class SensorFrameParseTest {
         assertEquals(0.420, frame.balance().uq(), 1e-9);
         assertEquals(137.65, frame.encoder().angle(), 1e-9);
     }
+
+    /** 결함 주입으로만 나오는 값들 — fault 의 freeze/drift 와 판정 single. */
+    static final String INJECTED_JSON = """
+            {"ts":9,"sensors":[\
+            {"ch":5,"ax":0,"ay":1,"az":0,"gx":0,"gy":0,"gz":0,\
+            "ax0":0,"ay0":0,"gz0":0,"fault":"dropout"},\
+            {"ch":6,"ax":0,"ay":1,"az":0,"gx":0,"gy":0,"gz":0,\
+            "ax0":0,"ay0":0,"gz0":0,"fault":"dropout"},\
+            {"ch":7,"ax":0,"ay":1,"az":0,"gx":0,"gy":0,"gz":0,\
+            "ax0":0,"ay0":0,"gz0":0,"fault":"freeze"}],\
+            "voting":{"tol":{"accel":0.0916,"gyro":2.29},\
+            "accel":{"result":"single","used":[7],"rejected":[5,6],"val":[0.0,1.0]},\
+            "gyro":{"result":"fail","used":[],"rejected":[5,6,7],"val":[]}},\
+            "balance":{"angle":0,"rate":0,"setpoint":0,"uq":0},\
+            "encoder":{"angle":0}}""";
+
+    @Test
+    void injectedFaultsAndSingleVerdictParse() {
+        SensorFrame frame = MAPPER.readValue(INJECTED_JSON, SensorFrame.class);
+
+        assertEquals("dropout", frame.sensors().get(0).fault());
+        assertEquals("freeze", frame.sensors().get(2).fault());
+
+        // 둘이 읽기 실패라 남은 하나로 간다. 검증은 못 하지만 제어는 이어진다.
+        assertEquals("single", frame.voting().accel().result());
+        assertEquals(1, frame.voting().accel().used().size());
+        assertEquals(7, frame.voting().accel().used().get(0));
+
+        // fail 은 채택이 없고 값도 내지 않는다.
+        assertEquals("fail", frame.voting().gyro().result());
+        assertEquals(0, frame.voting().gyro().used().size());
+        assertEquals(0, frame.voting().gyro().val().size());
+    }
 }

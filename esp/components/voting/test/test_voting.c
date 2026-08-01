@@ -100,11 +100,40 @@ static void test_one_dropout(void)
     CHECK(o.val[0] == 150 && o.val[1] == 16050, "평균 %d,%d", o.val[0], o.val[1]);
 }
 
-// 하나만 남으면 비교할 상대가 없다. 값이 맞는지 확인할 수 없으므로 FAIL 이다.
-static void test_two_dropout(void)
+// 둘이 읽기 실패면 남은 하나가 유일한 데이터다. 검증은 못 해도 그 값으로 간다.
+static void test_two_dropout_is_single(void)
 {
     const bool    valid[VOTING_N] = { true, false, false };
     const int16_t v[VOTING_N][VOTING_AXIS_MAX] = { {100, 16000}, {0, 0}, {0, 0} };
+    voting_out_t  o;
+
+    voting_fuse(v, valid, 2, VOTING_TOL_ACC, &o);
+
+    CHECK(o.result == VOTING_SINGLE, "result=%d", o.result);
+    CHECK(o.used[0] && !o.used[1] && !o.used[2], "0번만 채택되어야 한다");
+    CHECK(o.val[0] == 100 && o.val[1] == 16000, "값 %d,%d", o.val[0], o.val[1]);
+}
+
+// 셋 다 읽기 실패. 쓸 값이 없다.
+static void test_all_dropout(void)
+{
+    const bool    valid[VOTING_N] = { false, false, false };
+    const int16_t v[VOTING_N][VOTING_AXIS_MAX] = { {0, 0}, {0, 0}, {0, 0} };
+    voting_out_t  o;
+
+    voting_fuse(v, valid, 2, VOTING_TOL_ACC, &o);
+
+    CHECK(o.result == VOTING_FAIL, "result=%d", o.result);
+}
+
+/*
+ * 읽히긴 하는데 값이 어긋나는 경우는 SINGLE 이 아니라 FAIL 이다.
+ * 둘 다 살아 있으니 "유일한 데이터" 가 아니고, 누가 맞는지 가릴 근거도 없다.
+ */
+static void test_two_valid_disagree_is_fail(void)
+{
+    const bool    valid[VOTING_N] = { true, true, false };
+    const int16_t v[VOTING_N][VOTING_AXIS_MAX] = { {0, 0}, {9000, 0}, {0, 0} };
     voting_out_t  o;
 
     voting_fuse(v, valid, 2, VOTING_TOL_ACC, &o);
@@ -153,7 +182,9 @@ int main(void)
     test_all_disagree();
     test_tolerance_edge();
     test_one_dropout();
-    test_two_dropout();
+    test_two_dropout_is_single();
+    test_all_dropout();
+    test_two_valid_disagree_is_fail();
     test_gyro_ignores_second_axis();
     test_broken_gyro_keeps_its_accel();
 

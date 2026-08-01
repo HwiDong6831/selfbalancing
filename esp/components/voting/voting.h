@@ -15,6 +15,7 @@
 typedef enum {
     VOTING_OK = 0,      // 3개 전부 채택
     VOTING_DEGRADED,    // 1개 배제하고 나머지 둘로 계속
+    VOTING_SINGLE,      // 나머지가 읽기 실패. 남은 하나로 계속하되 검증은 못 한다
     VOTING_FAIL,        // 다수결 불가. 값을 내지 않는다
 } voting_result_t;
 

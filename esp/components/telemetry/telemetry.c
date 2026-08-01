@@ -17,6 +17,7 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 #include "esp_websocket_client.h"
+#include "cJSON.h"
 
 static const char *TAG = "TELE";
 
@@ -110,6 +111,58 @@ static esp_err_t wifi_start_sta(void)
     return ESP_OK;
 }
 
+/*
+ * 대시보드가 건 결함 주입. 채널 번호로 찾는다.
+ * mode/rate 는 WS 태스크가 쓰고 제어 태스크가 읽는다 (telemetry.h 참조).
+ */
+static struct {
+    int   ch;
+    volatile telemetry_fault_t mode;
+    volatile float rate;
+} s_inject[3] = { { .ch = -1 }, { .ch = -1 }, { .ch = -1 } };
+
+telemetry_fault_t telemetry_get_inject(int ch, float *rate)
+{
+    for (int i = 0; i < 3; i++) {
+        if (s_inject[i].ch != ch) continue;
+        if (rate) *rate = s_inject[i].rate;
+        return s_inject[i].mode;
+    }
+    if (rate) *rate = 0.0f;
+    return TELEMETRY_FAULT_NONE;
+}
+
+// {"cmd":"fault","ch":6,"mode":"drift","rate":0.5}
+static void apply_command(const char *json, int len)
+{
+    cJSON *root = cJSON_ParseWithLength(json, len);
+    if (!root) {
+        ESP_LOGW(TAG, "명령 파싱 실패");
+        return;
+    }
+
+    const cJSON *ch   = cJSON_GetObjectItem(root, "ch");
+    const cJSON *mode = cJSON_GetObjectItem(root, "mode");
+    if (cJSON_IsNumber(ch) && cJSON_IsString(mode)) {
+        telemetry_fault_t m = TELEMETRY_FAULT_NONE;
+        if      (!strcmp(mode->valuestring, "dropout")) m = TELEMETRY_FAULT_DROPOUT;
+        else if (!strcmp(mode->valuestring, "freeze"))  m = TELEMETRY_FAULT_FREEZE;
+        else if (!strcmp(mode->valuestring, "drift"))   m = TELEMETRY_FAULT_DRIFT;
+
+        const cJSON *rate = cJSON_GetObjectItem(root, "rate");
+        // 처음 보는 채널이면 빈 칸에 자리를 잡는다
+        for (int i = 0; i < 3; i++) {
+            if (s_inject[i].ch != ch->valueint && s_inject[i].ch != -1) continue;
+            s_inject[i].ch   = ch->valueint;
+            s_inject[i].rate = cJSON_IsNumber(rate) ? (float)rate->valuedouble : 0.0f;
+            s_inject[i].mode = m;
+            ESP_LOGW(TAG, "결함 주입 ch%d = %s", ch->valueint, mode->valuestring);
+            break;
+        }
+    }
+    cJSON_Delete(root);
+}
+
 static void ws_event_handler(void *arg, esp_event_base_t base,
                              int32_t id, void *data)
 {
@@ -117,6 +170,14 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
     case WEBSOCKET_EVENT_CONNECTED:
         ESP_LOGI(TAG, "서버 연결됨: %s", s_cfg.server_uri);
         break;
+    case WEBSOCKET_EVENT_DATA: {
+        // 텍스트 프레임만 본다. ping/pong/close 는 op_code 가 다르다.
+        esp_websocket_event_data_t *d = data;
+        if (d->op_code == 0x01 && d->data_len > 0) {
+            apply_command(d->data_ptr, d->data_len);
+        }
+        break;
+    }
     case WEBSOCKET_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "서버 연결 끊김 (자동 재시도)");
         break;
@@ -139,6 +200,8 @@ static const char *fault_name(telemetry_fault_t f)
 {
     switch (f) {
     case TELEMETRY_FAULT_DROPOUT: return "dropout";
+    case TELEMETRY_FAULT_FREEZE:  return "freeze";
+    case TELEMETRY_FAULT_DRIFT:   return "drift";
     default:                      return "none";
     }
 }
@@ -147,7 +210,7 @@ static const char *fault_name(telemetry_fault_t f)
 static int vote_json(const telemetry_voting_t *v, const telemetry_sensor_t *s,
                      int axes, char *buf, size_t n)
 {
-    static const char *name[] = { "ok", "degraded", "fail" };
+    static const char *name[] = { "ok", "degraded", "single", "fail" };
 
     int len = snprintf(buf, n, "{\"result\":\"%s\",\"used\":[", name[v->result]);
 

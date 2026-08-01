@@ -6,6 +6,7 @@
  * 제어는 별도 태스크에서 돌고 app_main 은 로그만 찍는다.
  */
 #include <math.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -130,6 +131,15 @@ static void i2c_bus_init(void)
     };
     ESP_ERROR_CHECK(i2c_param_config(I2C_PORT, &conf));
     ESP_ERROR_CHECK(i2c_driver_install(I2C_PORT, I2C_MODE_MASTER, 0, 0, 0));
+}
+
+// 센서 값은 ±2g·±250도/s 끝에서 int16 한계에 닿는다. 영점을 빼거나 drift 를 더하면
+// 그 범위를 넘어가 부호가 뒤집히므로 잘라 준다.
+static int16_t clamp16(float v)
+{
+    if (v >  32767.0f) return  32767;
+    if (v < -32768.0f) return -32768;
+    return (int16_t)v;
 }
 
 // 엔코더 각도 차이. 0/2π 경계를 넘어도 되도록 최단 방향으로 접는다.
@@ -360,6 +370,10 @@ static void balance_loop(float offset, float setpoint)
     bool    valid[NUM_SENSORS];
     voting_out_t va = {0}, vg = {0};
 
+    // 결함 주입용. held 는 freeze 가 되돌려 줄 마지막 정상값, drift 는 누적 벌어짐이다.
+    int16_t held_a[NUM_SENSORS][3] = {{0}}, held_g[NUM_SENSORS][3] = {{0}};
+    float   drift[NUM_SENSORS] = {0};
+
     encoder_read_angle(&prev_angle);
 
     TickType_t last_wake = xTaskGetTickCount();
@@ -383,12 +397,34 @@ static void balance_loop(float offset, float setpoint)
                 g[i][0] = g[i][1] = g[i][2] = 0;
             } else {
                 fault[i] = TELEMETRY_FAULT_NONE;
+                memcpy(held_a[i], a[i], sizeof a[i]);   // freeze 가 되돌려 줄 값
+                memcpy(held_g[i], g[i], sizeof g[i]);
             }
-            valid[i] = (fault[i] == TELEMETRY_FAULT_NONE);
 
-            av[i][0] = (int16_t)(a[i][0] - s_a0[i][0]);
-            av[i][1] = (int16_t)(a[i][1] - s_a0[i][1]);
-            gv[i][0] = (int16_t)(g[i][2] - s_gz0[i]);
+            // 결함 주입. 실제 결함과 같은 경로를 타도록 원본 값을 덮는다.
+            float inj_rate;
+            telemetry_fault_t inj = telemetry_get_inject(MUX_CHANNELS[i], &inj_rate);
+            drift[i] = (inj == TELEMETRY_FAULT_DRIFT) ? drift[i] + inj_rate * dt : 0.0f;
+
+            if (inj == TELEMETRY_FAULT_DROPOUT) {
+                a[i][0] = a[i][1] = a[i][2] = 0;
+                g[i][0] = g[i][1] = g[i][2] = 0;
+            } else if (inj == TELEMETRY_FAULT_FREEZE) {
+                memcpy(a[i], held_a[i], sizeof a[i]);
+                memcpy(g[i], held_g[i], sizeof g[i]);
+            } else if (inj == TELEMETRY_FAULT_DRIFT) {
+                // 임계값 배수로 받아 신호마다 제 임계값에 맞춰 벌린다. 둘이 같이 걸린다.
+                a[i][0] = clamp16(a[i][0] + drift[i] * VOTING_TOL_ACC);
+                a[i][1] = clamp16(a[i][1] + drift[i] * VOTING_TOL_ACC);
+                g[i][2] = clamp16(g[i][2] + drift[i] * VOTING_TOL_GYRO);
+            }
+            if (inj != TELEMETRY_FAULT_NONE) fault[i] = inj;
+
+            valid[i] = (fault[i] != TELEMETRY_FAULT_DROPOUT);
+
+            av[i][0] = clamp16(a[i][0] - s_a0[i][0]);
+            av[i][1] = clamp16(a[i][1] - s_a0[i][1]);
+            gv[i][0] = clamp16(g[i][2] - s_gz0[i]);
         }
 
         // 가속도쌍과 자이로를 따로 투표한다 (이유는 voting.h).

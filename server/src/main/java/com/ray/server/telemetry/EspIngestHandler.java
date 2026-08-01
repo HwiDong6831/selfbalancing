@@ -27,19 +27,23 @@ public class EspIngestHandler extends TextWebSocketHandler {
 
     private final ObjectMapper mapper;
     private final TelemetrySink sink;
+    private final CommandRelay relay;
 
-    public EspIngestHandler(ObjectMapper mapper, TelemetrySink sink) {
+    public EspIngestHandler(ObjectMapper mapper, TelemetrySink sink, CommandRelay relay) {
         this.mapper = mapper;
         this.sink = sink;
+        this.relay = relay;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
+        relay.bind(session);   // 역방향(결함 주입) 전송에 쓴다
         log.info("ESP32 connected: {}", session.getId());
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        relay.unbind(session);
         log.info("ESP32 disconnected: {} ({})", session.getId(), status);
     }
 

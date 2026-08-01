@@ -32,6 +32,22 @@
       <div id="sensors" class="sensor-grid"></div>
     </details>
 
+    <!-- 결함 주입 -->
+    <details class="panel" open>
+      <summary>
+        <h2>
+          결함 주입
+          <span class="unit">센서 값을 인위적으로 변조해 voting 을 검증한다</span>
+          <button type="button" id="fi-clear" class="log-btn no-toggle">전체 해제</button>
+        </h2>
+      </summary>
+      <div id="fi-rows" class="fi-rows"></div>
+      <div class="fi-note">
+        값 고정은 로봇이 멈춰 있는 동안에는 정상값과 구분되지 않아 배제되지 않는다.
+        점진적 변형 속도는 <b>초당 임계값의 몇 배</b>로 벌어지는지를 뜻한다.
+      </div>
+    </details>
+
     <!-- Voting (이상 이력 포함) -->
     <details class="panel" open>
       <summary><h2>Voting</h2></summary>
