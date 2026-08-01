@@ -72,6 +72,8 @@ function push(b) {
 function drawChart() {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;   // 패널이 접혀 있으면 크기가 0 이다. 그리지 않는다
+
   if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
     canvas.width = w * dpr; canvas.height = h * dpr;
   }
@@ -129,10 +131,12 @@ function render(frame) {
   $("enc").textContent     = fmt(frame.encoder ? frame.encoder.angle : null, 1);
 
   const v = frame.voting || {};
-  renderVote("accel", v.accel);
-  renderVote("gyro", v.gyro);
+  const chans = (frame.sensors || []).map((s) => s.ch);
+  renderVote("accel", v.accel, chans);
+  renderVote("gyro", v.gyro, chans);
 
   renderSensors(frame.sensors || []);
+  recordVote(frame);
   push(b);
 }
 
@@ -140,15 +144,182 @@ function render(frame) {
 const FAULT_LABEL = { none: "정상", dropout: "끊김", freeze: "고정", drift: "드리프트" };
 const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", fail: "실패" };
 
-// 가속도·자이로 판정 한 덩이
-function renderVote(kind, v) {
+// 가속도·자이로 판정 한 덩이. 채널마다 카드 하나로 채택 여부를 색으로 보인다.
+function renderVote(kind, v, chans) {
   v = v || {};
   const badge = $(`vote-${kind}-result`);
   badge.textContent = VOTE_LABEL[v.result] || "–";
   badge.className = "badge badge--" +
     (v.result === "ok" ? "ok" : v.result === "fail" ? "fail" : "warn");
-  $(`vote-${kind}-detail`).textContent =
-    `used: [${(v.used || []).join(", ")}]　rejected: [${(v.rejected || []).join(", ")}]`;
+
+  const host = $(`vote-${kind}-chs`);
+  while (host.childElementCount < chans.length) {   // 카드 부족하면 생성
+    host.appendChild(document.createElement("span"));
+  }
+  const used = v.used || [];
+  chans.forEach((ch, i) => {
+    // fail 은 채택이 없으므로 전부 빨강이 된다
+    const cls = v.result === "fail" ? "fail" : used.includes(ch) ? "ok" : "warn";
+    const el = host.children[i];
+    el.className = "ch-card ch-card--" + cls;
+    el.textContent = "ch " + ch;
+    el.title = cls === "ok" ? "채택" : cls === "fail" ? "검증 불가" : "배제";
+  });
+}
+
+/*
+ * 이상 이력. 판정과 배제 채널이 바뀌는 순간에만 행을 만들고, 같은 상태가 이어지는 동안은
+ * 그 행의 지속 칸만 갱신한다. 50Hz 로 매 프레임 남기면 못 보고, 전이만 남기면 한 번 튄
+ * 것과 계속 고장난 것을 구분할 수 없다.
+ */
+const VH_CAP = 200;
+const VH_SIG = {
+  accel: { unit: "g",   digits: 4, axes: ["ax", "ay"] },
+  gyro:  { unit: "°/s", digits: 2, axes: ["gz"] },
+};
+const vh = { accel: { key: "ok" }, gyro: { key: "ok" } };
+
+// 채널 필터. 배제 채널 중 하나라도 켜져 있으면 그 행을 보여준다.
+const vhChs = new Set();
+
+$("vh-clear").onclick = () => {
+  for (const sig of ["accel", "gyro"]) {
+    $("vh-" + sig).textContent = "";
+    vh[sig] = { key: "ok" };
+  }
+  updateEmpty();
+};
+
+for (const tab of document.querySelectorAll(".vh-tab")) {
+  tab.onclick = () => {
+    const sig = tab.dataset.sig;
+    for (const t of document.querySelectorAll(".vh-tab")) t.classList.toggle("is-on", t === tab);
+    $("vh-accel").hidden = sig !== "accel";
+    $("vh-gyro").hidden  = sig !== "gyro";
+    $("vh-table").dataset.sig = sig;
+    updateEmpty();
+  };
+}
+
+const activeSig = () => $("vh-table").dataset.sig;
+const rowShown = (tr) => tr.dataset.chs.split(",").some((c) => vhChs.has(c));
+
+function updateEmpty() {
+  const body = $("vh-" + activeSig());
+  const el = $("vh-empty");
+  el.hidden = [...body.children].some((tr) => !tr.hidden);
+  el.textContent = body.childElementCount ? "선택한 채널에 해당하는 이상 없음" : "이상 없음";
+}
+
+function applyFilter() {
+  for (const sig of ["accel", "gyro"]) {
+    for (const tr of $("vh-" + sig).children) tr.hidden = !rowShown(tr);
+  }
+  updateEmpty();
+}
+
+// 채널 번호는 펌웨어가 정하므로 프레임을 보고 처음 나타난 채널부터 만든다.
+function syncChannelFilter(sensors) {
+  const host = $("vh-chs");
+  for (const s of sensors) {
+    const ch = String(s.ch);
+    if (vhChs.has(ch) || host.querySelector(`[data-ch="${ch}"]`)) continue;
+    vhChs.add(ch);
+
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.dataset.ch = ch;
+    box.onchange = () => {
+      if (box.checked) vhChs.add(ch);
+      else vhChs.delete(ch);
+      applyFilter();
+    };
+
+    const label = document.createElement("label");
+    label.className = "vh-ch";
+    label.append(box, "ch" + ch);
+    host.appendChild(label);
+  }
+}
+
+function recordVote(frame) {
+  const v = frame.voting || {};
+  if (v.tol) {
+    $("vh-tol").textContent =
+      `임계값  가속도 ${fmt(v.tol.accel, 4)} g　자이로 ${fmt(v.tol.gyro, 2)} °/s`;
+  }
+  syncChannelFilter(frame.sensors || []);
+  for (const sig of ["accel", "gyro"]) track(sig, v[sig], frame.sensors || []);
+}
+
+function track(sig, vote, sensors) {
+  const st = vh[sig];
+  const result = (vote && vote.result) || "ok";
+  const rejected = (vote && vote.rejected) || [];
+
+  // 배제 채널이 바뀌면 판정이 같아도 다른 사건이다
+  const key = result === "ok" ? "ok" : result + ":" + rejected.join(",");
+  if (key === st.key) {
+    if (result !== "ok") {
+      st.frames++;
+      st.dur.textContent = duration(st);
+    }
+    return;
+  }
+  st.key = key;
+  if (result === "ok") return;
+
+  st.t0 = Date.now();
+  st.frames = 1;
+  addRow(sig, result, vote, rejected, sensors, st);
+  updateEmpty();
+}
+
+const duration = (st) =>
+  `${st.frames}프레임 / ${((Date.now() - st.t0) / 1000).toFixed(2)}초`;
+
+function addRow(sig, result, vote, rejected, sensors, st) {
+  const { unit, digits, axes } = VH_SIG[sig];
+
+  // degraded 는 항상 1개만 배제한다. fail 은 채택이 없어 비교할 정상값이 없다.
+  const bad = rejected.length === 1 ? sensors.find((s) => s.ch === rejected[0]) : null;
+  let badTxt = "–", okTxt = "–", gapTxt = "–";
+  if (bad) {
+    const bv = axes.map((k) => Number(bad[k]));
+    const ov = (vote.val || []).map(Number);
+    badTxt = bv.map((x) => fmt(x, digits)).join(" ");
+    okTxt  = ov.map((x) => fmt(x, digits)).join(" ");
+    let gap = 0;
+    for (let i = 0; i < bv.length && i < ov.length; i++) {
+      gap = Math.max(gap, Math.abs(bv[i] - ov[i]));
+    }
+    gapTxt = fmt(gap, digits) + " " + unit;
+    if (bad.fault && bad.fault !== "none") badTxt = FAULT_LABEL[bad.fault] || bad.fault;
+  }
+
+  const t = new Date(st.t0);
+  const hhmmss = t.toTimeString().slice(0, 8) +
+                 "." + String(t.getMilliseconds()).padStart(3, "0");
+
+  const tr = document.createElement("tr");
+  tr.className = "vh-" + (result === "fail" ? "fail" : "warn");
+  tr.dataset.chs = rejected.join(",");
+  tr.hidden = !rowShown(tr);
+  const cells = [hhmmss, VOTE_LABEL[result] || result,
+                 rejected.length ? rejected.map((c) => "ch" + c).join(", ") : "–",
+                 badTxt, okTxt, gapTxt, ""];
+  for (const text of cells) {
+    const td = document.createElement("td");
+    td.textContent = text;
+    tr.appendChild(td);
+  }
+  st.dur = tr.lastChild;
+  st.dur.textContent = duration(st);
+
+  const body = $("vh-" + sig);
+  body.insertBefore(tr, body.firstChild);   // 최신이 위
+  while (body.childElementCount > VH_CAP) body.removeChild(body.lastChild);
 }
 
 function renderSensors(sensors) {
@@ -162,7 +333,8 @@ function renderSensors(sensors) {
          <tr><td class="k">ax</td><td class="v ax"></td><td class="k">gx</td><td class="v gx"></td></tr>
          <tr><td class="k">ay</td><td class="v ay"></td><td class="k">gy</td><td class="v gy"></td></tr>
          <tr><td class="k">az</td><td class="v az"></td><td class="k">gz</td><td class="v gz"></td></tr>
-       </tbody></table>`;
+       </tbody></table>
+       <div class="zero"></div>`;
     host.appendChild(card);
   }
   sensors.forEach((s, i) => {
@@ -175,6 +347,9 @@ function renderSensors(sensors) {
     // 가속도는 g(±2), 각속도는 deg/s(±250) 라 유효자리가 다르다.
     for (const k of ["ax", "ay", "az"]) c.querySelector("." + k).textContent = fmt(s[k], 3);
     for (const k of ["gx", "gy", "gz"]) c.querySelector("." + k).textContent = fmt(s[k], 1);
+    // 위 값에서 이미 뺀 영점. 셋이 크게 다르면 임계값을 다시 봐야 한다는 신호다.
+    c.querySelector(".zero").textContent =
+      `영점  ax ${fmt(s.ax0, 4)}  ay ${fmt(s.ay0, 4)}  gz ${fmt(s.gz0, 2)}`;
   });
 }
 
@@ -195,6 +370,11 @@ function appendLog(line) {
 
   while (logEl.childElementCount > LOG_CAP) logEl.removeChild(logEl.firstChild);
   if (followEl.checked) logEl.scrollTop = logEl.scrollHeight;
+}
+
+// summary 안의 조작 요소는 눌러도 섹션이 접히지 않게 한다
+for (const el of document.querySelectorAll("summary .no-toggle")) {
+  el.onclick = (e) => e.stopPropagation();
 }
 
 // 차트 렌더 루프

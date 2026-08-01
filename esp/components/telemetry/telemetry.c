@@ -23,7 +23,7 @@ static const char *TAG = "TELE";
 #define COMM_CORE       1       // 제어 루프는 core 0, 통신 루프는 core 1
 #define TASK_STACK      4096
 #define TASK_PRIO       3
-#define JSON_BUF_SIZE   768
+#define JSON_BUF_SIZE   1024
 
 #define LOG_LINE_MAX    160
 #define LOG_Q_LEN       48      // WS 연결 전 부팅 로그 저장 길이
@@ -143,9 +143,9 @@ static const char *fault_name(telemetry_fault_t f)
     }
 }
 
-// {"result":"ok","used":[5,6],"rejected":[7]} 한 덩이. 가속도·자이로에 각각 쓴다.
+// 판정 한 덩이. 가속도(axes 2)·자이로(axes 1)에 각각 쓴다.
 static int vote_json(const telemetry_voting_t *v, const telemetry_sensor_t *s,
-                     char *buf, size_t n)
+                     int axes, char *buf, size_t n)
 {
     static const char *name[] = { "ok", "degraded", "fail" };
 
@@ -163,6 +163,12 @@ static int vote_json(const telemetry_voting_t *v, const telemetry_sensor_t *s,
         len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
                         "%s%d", (k++ ? "," : ""), s[i].ch);
     }
+    len += snprintf(buf + len, (len < (int)n) ? n - len : 0, "],\"val\":[");
+
+    for (int k = 0; k < axes; k++) {
+        len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
+                        "%s%.4f", (k ? "," : ""), fin(v->val[k]));
+    }
     len += snprintf(buf + len, (len < (int)n) ? n - len : 0, "]}");
 
     return len;
@@ -177,18 +183,22 @@ static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
     for (int i = 0; i < 3; i++) {
         const telemetry_sensor_t *s = &f->sensors[i];
         len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
-            "%s{\"ch\":%d,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,"
-            "\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,\"fault\":\"%s\"}",
+            "%s{\"ch\":%d,\"ax\":%.4f,\"ay\":%.4f,\"az\":%.3f,"
+            "\"gx\":%.2f,\"gy\":%.2f,\"gz\":%.2f,"
+            "\"ax0\":%.4f,\"ay0\":%.4f,\"gz0\":%.2f,\"fault\":\"%s\"}",
             (i ? "," : ""), s->ch,
             fin(s->ax), fin(s->ay), fin(s->az),
-            fin(s->gx), fin(s->gy), fin(s->gz), fault_name(s->fault));
+            fin(s->gx), fin(s->gy), fin(s->gz),
+            fin(s->ax0), fin(s->ay0), fin(s->gz0), fault_name(s->fault));
     }
 
-    len += snprintf(buf + len, (len < (int)n) ? n - len : 0, "],\"voting\":{\"accel\":");
-    len += vote_json(&f->accel, f->sensors, buf + len, (len < (int)n) ? n - len : 0);
+    len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
+        "],\"voting\":{\"tol\":{\"accel\":%.4f,\"gyro\":%.2f},\"accel\":",
+        fin(f->tol_accel), fin(f->tol_gyro));
+    len += vote_json(&f->accel, f->sensors, 2, buf + len, (len < (int)n) ? n - len : 0);
 
     len += snprintf(buf + len, (len < (int)n) ? n - len : 0, ",\"gyro\":");
-    len += vote_json(&f->gyro, f->sensors, buf + len, (len < (int)n) ? n - len : 0);
+    len += vote_json(&f->gyro, f->sensors, 1, buf + len, (len < (int)n) ? n - len : 0);
 
     len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
         "},\"balance\":{\"angle\":%.2f,\"rate\":%.2f,\"setpoint\":%.2f,\"uq\":%.3f},"

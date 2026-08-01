@@ -12,10 +12,11 @@
     <span id="conn" class="conn conn--off">연결 끊김</span>
   </header>
 
+  <!-- details/summary 로 접는다. 상태를 JS 로 들고 있지 않아도 되고 키보드로도 열린다. -->
   <main>
     <!-- 밸런싱 상태 -->
-    <section class="panel">
-      <h2>밸런싱</h2>
+    <details class="panel" open>
+      <summary><h2>밸런싱</h2></summary>
       <div class="metrics">
         <div class="metric"><span class="label">angle</span><span id="b-angle" class="val">–</span><span class="unit">deg</span></div>
         <div class="metric"><span class="label">rate</span><span id="b-rate" class="val">–</span><span class="unit">dps</span></div>
@@ -23,43 +24,75 @@
         <div class="metric"><span class="label">uq</span><span id="b-uq" class="val">–</span><span class="unit">V</span></div>
         <div class="metric"><span class="label">encoder</span><span id="enc" class="val">–</span><span class="unit">deg</span></div>
       </div>
-    </section>
+    </details>
 
-    <!-- Voting -->
-    <section class="panel">
-      <h2>Voting</h2>
-      <h3 class="vote-title">가속도 <span id="vote-accel-result" class="badge">–</span></h3>
-      <div id="vote-accel-detail" class="vote-detail">used: –　rejected: –</div>
-      <h3 class="vote-title">자이로 <span id="vote-gyro-result" class="badge">–</span></h3>
-      <div id="vote-gyro-detail" class="vote-detail">used: –　rejected: –</div>
-    </section>
+    <!-- 센서 3개 -->
+    <details class="panel" open>
+      <summary><h2>MPU6050 ×3 <span class="unit">a: g　g: deg/s　ax/ay/gz 는 영점 뺀 값</span></h2></summary>
+      <div id="sensors" class="sensor-grid"></div>
+    </details>
+
+    <!-- Voting (이상 이력 포함) -->
+    <details class="panel" open>
+      <summary><h2>Voting</h2></summary>
+
+      <h3 class="vote-title">가속도
+        <span id="vote-accel-result" class="badge">–</span>
+        <span id="vote-accel-chs" class="ch-cards"></span>
+      </h3>
+      <h3 class="vote-title">자이로
+        <span id="vote-gyro-result" class="badge">–</span>
+        <span id="vote-gyro-chs" class="ch-cards"></span>
+      </h3>
+
+      <h3 class="vote-title">
+        이상 이력
+        <span id="vh-tol" class="unit">임계값 –</span>
+        <button type="button" id="vh-clear" class="log-btn">지우기</button>
+      </h3>
+      <div class="vh-tabs">
+        <button type="button" class="vh-tab vh-tab--accel is-on" data-sig="accel">가속도</button>
+        <button type="button" class="vh-tab vh-tab--gyro" data-sig="gyro">자이로</button>
+        <span class="vh-chs-label">채널</span>
+        <span id="vh-chs" class="vh-chs"></span>
+      </div>
+      <div class="vh-scroll">
+        <table id="vh-table" class="vh" data-sig="accel">
+          <thead>
+            <tr>
+              <th>시각</th><th>판정</th><th>배제 채널</th>
+              <th>오류값</th><th>정상값</th><th>벌어진 폭</th><th>지속</th>
+            </tr>
+          </thead>
+          <tbody id="vh-accel"></tbody>
+          <tbody id="vh-gyro" hidden></tbody>
+        </table>
+        <div id="vh-empty" class="vh-empty">이상 없음</div>
+      </div>
+    </details>
 
     <!-- 실시간 차트 -->
-    <section class="panel panel--wide">
-      <h2>실시간 (angle / rate / uq)</h2>
+    <details class="panel" open>
+      <summary><h2>실시간 (angle / rate / uq)</h2></summary>
       <canvas id="chart" width="900" height="240"></canvas>
       <div class="legend">
         <span class="lg lg--angle">angle</span>
         <span class="lg lg--rate">rate</span>
         <span class="lg lg--uq">uq</span>
       </div>
-    </section>
-
-    <!-- 센서 3개 -->
-    <section class="panel panel--wide">
-      <h2>MPU6050 ×3 <span class="unit">a: g　g: deg/s</span></h2>
-      <div id="sensors" class="sensor-grid"></div>
-    </section>
+    </details>
 
     <!-- ESP32 시리얼 로그 -->
-    <section class="panel panel--wide">
-      <h2>
-        시리얼 로그
-        <label class="log-opt"><input type="checkbox" id="log-follow" checked> 자동 스크롤</label>
-        <button type="button" id="log-clear" class="log-btn">지우기</button>
-      </h2>
+    <details class="panel" open>
+      <summary>
+        <h2>
+          시리얼 로그
+          <label class="log-opt no-toggle"><input type="checkbox" id="log-follow" checked> 자동 스크롤</label>
+          <button type="button" id="log-clear" class="log-btn no-toggle">지우기</button>
+        </h2>
+      </summary>
       <div id="log" class="log"></div>
-    </section>
+    </details>
   </main>
 
   <script src="app.js"></script>

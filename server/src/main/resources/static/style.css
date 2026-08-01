@@ -11,6 +11,8 @@
   --ok: #2ea043;
   --warn: #d29922;
   --fail: #f85149;
+  --accel: #4da3ff;   /* 가속도 = 파랑 */
+  --gyro: #b392f0;    /* 자이로 = 보라 */
 }
 
 * { box-sizing: border-box; }
@@ -40,8 +42,8 @@ body {
 .conn--off  { background: rgba(248,81,73,.15);  color: var(--fail); }
 
 main {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
   padding: 14px;
   max-width: 1100px;
@@ -53,8 +55,15 @@ main {
   border-radius: 10px;
   padding: 14px 16px;
 }
-.panel--wide { grid-column: 1 / -1; }
 .panel h2 { font-size: .95rem; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+
+/* 접기 머리. 기본 삼각형 대신 직접 그려 열림/닫힘을 보인다 */
+.panel > summary { cursor: pointer; display: flex; align-items: center; gap: 8px; list-style: none; }
+.panel > summary::-webkit-details-marker { display: none; }
+.panel > summary::before { content: "▾"; color: var(--muted); font-size: .8rem; width: 12px; }
+.panel:not([open]) > summary::before { content: "▸"; }
+.panel > summary h2 { margin: 0; flex: 1; }
+.panel[open] > summary { margin-bottom: 12px; }
 
 /* 밸런싱 metrics */
 .metrics { display: flex; flex-wrap: wrap; gap: 18px; }
@@ -73,10 +82,58 @@ main {
 .badge--ok   { background: rgba(46,160,67,.2);  color: var(--ok);  }
 .badge--warn { background: rgba(210,153,34,.2); color: var(--warn); }
 .badge--fail { background: rgba(248,81,73,.2);  color: var(--fail); }
-.vote-detail { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+/*
+ * 판정 배지는 폭을 고정한다. min-width 로는 가장 긴 "일부 이상" 이 그 값을 넘어 다시
+ * 늘어난다. flex 로 늘지도 줄지도 않게 못 박아야 뒤의 채널 카드가 흔들리지 않는다.
+ */
+.vote-title .badge { flex: 0 0 5.5rem; text-align: center; white-space: nowrap; }
+
+/* 채널 카드. 녹색 = 채택, 노란색 = 배제, 빨간색 = 검증 불가(fail) */
+.ch-cards { display: flex; gap: 6px; }
+.ch-card {
+  font-size: .7rem; font-weight: 600; padding: 2px 8px;
+  border: 1px solid; border-radius: 6px; font-variant-numeric: tabular-nums;
+}
+.ch-card--ok   { color: var(--ok);   border-color: rgba(46,160,67,.5);  background: rgba(46,160,67,.15); }
+.ch-card--warn { color: var(--warn); border-color: rgba(210,153,34,.5); background: rgba(210,153,34,.15); }
+.ch-card--fail { color: var(--fail); border-color: rgba(248,81,73,.5);  background: rgba(248,81,73,.15); }
 /* .sensor-card h3 와 특이도가 겹치지 않게 클래스로 한정 */
 .vote-title { font-size: .82rem; margin: 12px 0 4px; display: flex; align-items: center; gap: 8px; }
 .vote-title:first-of-type { margin-top: 0; }
+.vote-title .log-btn { margin-left: auto; }
+
+/* 이상 이력 */
+.vh-tabs { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 10px; }
+.vh-tab {
+  font-size: .8rem; font-weight: 600; cursor: pointer;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 6px 6px 0 0; padding: 5px 14px;
+}
+.vh-tab--accel.is-on { color: var(--accel); border-color: var(--accel); background: rgba(77,163,255,.12); }
+.vh-tab--gyro.is-on  { color: var(--gyro);  border-color: var(--gyro);  background: rgba(179,146,240,.12); }
+
+.vh-chs-label { margin-left: auto; padding-bottom: 6px; color: var(--muted); font-size: .72rem; }
+.vh-chs { display: flex; gap: 10px; padding-bottom: 6px; }
+.vh-ch {
+  display: flex; align-items: center; gap: 4px; cursor: pointer;
+  color: var(--muted); font-size: .72rem; font-variant-numeric: tabular-nums;
+}
+.vh-ch:has(:checked) { color: var(--text); }
+
+/* 행이 쌓이면 패널이 끝없이 길어지므로 표만 스크롤한다. 머리 줄은 붙여 둔다. */
+.vh-scroll { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+
+/* 지금 어느 신호를 보는지 표 전체가 같은 색을 띠게 한다 */
+.vh { width: 100%; border-collapse: collapse; font-size: .8rem; font-variant-numeric: tabular-nums; }
+.vh thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); }
+.vh[data-sig="accel"] th { border-bottom: 2px solid var(--accel); }
+.vh[data-sig="gyro"]  th { border-bottom: 2px solid var(--gyro); }
+.vh th { text-align: left; color: var(--muted); font-weight: 600; padding: 5px 8px; white-space: nowrap; }
+.vh td { padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: pre; }
+.vh tbody tr.vh-warn td:first-child { border-left: 3px solid var(--warn); }
+.vh tbody tr.vh-fail td:first-child { border-left: 3px solid var(--fail); }
+.vh-empty { color: var(--muted); font-size: .82rem; padding: 10px 8px; }
 
 /* 차트 */
 #chart { width: 100%; height: 240px; display: block; background: #12161c; border-radius: 8px; }
@@ -100,6 +157,7 @@ main {
 .sensor-card td.k { color: var(--muted); width: 34px; padding-left: 14px; }
 .sensor-card td.k:first-child { padding-left: 0; }
 .sensor-card td.v { text-align: right; width: 64px; white-space: pre; }
+.zero { margin-top: 6px; color: var(--muted); font-size: .7rem; white-space: pre; font-variant-numeric: tabular-nums; }
 
 /* 시리얼 로그 */
 .log-opt { margin-left: auto; font-size: .72rem; color: var(--muted); font-weight: 400; display: flex; align-items: center; gap: 4px; }
@@ -121,6 +179,5 @@ main {
 .log .lv-E { color: var(--fail); }
 
 @media (max-width: 720px) {
-  main { grid-template-columns: 1fr; }
   .sensor-grid { grid-template-columns: 1fr; }
 }
