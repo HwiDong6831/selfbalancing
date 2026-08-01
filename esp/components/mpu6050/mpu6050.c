@@ -7,6 +7,7 @@
 #define MPU_ADDR        0x68
 
 #define REG_PWR_MGMT_1  0x6B
+#define REG_PWR_MGMT_2  0x6C
 #define REG_WHOAMI      0x75
 #define REG_ACCEL_XOUT  0x3B
 
@@ -47,6 +48,12 @@ esp_err_t mpu6050_init(i2c_port_t port, const int *channels, int num_channels)
             ESP_LOGE("MPU", "채널 %d : wake 실패", ch);
             continue;
         }
+
+        // 자이로 3축 대기 해제. 이 비트가 남아 있으면 가속도계는 멀쩡한데 자이로만 0 이 온다.
+        uint8_t gyro_on[2] = {REG_PWR_MGMT_2, 0x00};
+        err = i2c_master_write_to_device(s_port, MPU_ADDR, gyro_on, 2,
+                                         pdMS_TO_TICKS(I2C_TIMEOUT_MS));
+        if (err != ESP_OK) ESP_LOGE("MPU", "채널 %d : 자이로 대기 해제 실패", ch);
 
         // 센서 확인
         uint8_t who = 0;
