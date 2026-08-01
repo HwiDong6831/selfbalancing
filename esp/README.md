@@ -7,7 +7,7 @@ ESP32 D1 Mini 에서 도는 제어 펌웨어. core 0 이 제어 루프, core 1 �
 ```
 main/           app_main. 초기화 → 캘리브레이션 → 1kHz 제어 루프
 components/
-  mpu6050/      MPU6050 ×3 (TCA9548A mux 0x70)
+  mpu6050/      MPU6500 ×3 (PCA9548A mux 0x70)
   encoder/      MT6701 자기 인코더 (0x06)
   foc/          전압모드 FOC (LEDC 3-PWM + EN)
   balance/      상보필터 각도 추정 + 토크모드 상태피드백

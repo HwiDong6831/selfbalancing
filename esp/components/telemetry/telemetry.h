@@ -21,7 +21,7 @@ typedef enum {
 } telemetry_fault_t;
 
 typedef struct {
-    int   ch;                   // TCA9548A mux 채널
+    int   ch;                   // PCA9548A mux 채널
     float ax, ay, az;           // [g]      ax/ay 는 영점 뺀 비교값
     float gx, gy, gz;           // [deg/s]  gz 는 영점 뺀 비교값
     float ax0, ay0, gz0;        // 채널별 영점. 가속도는 중앙값 대비 차이다

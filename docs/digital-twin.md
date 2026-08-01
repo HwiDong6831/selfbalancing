@@ -12,7 +12,7 @@
 
 ### 자세 소스
 
-- **MPU6050(가속도 센서)만 사용.** 엔코더 휠각은 포함하지 않는다.
+- **가속도 센서(MPU6500)만 사용.** 엔코더 휠각은 포함하지 않는다.
 - Voting 알고리즘을 통과한 융합 자세 1개를 송신한다.
 
 ### 표현 방식 — 쿼터니언
@@ -30,8 +30,11 @@ Euler 각(roll/pitch/yaw)은 특정 자세에서 두 축이 겹치며 자유도�
 ## 3. 통신
 
 - 프로토콜: **WebSocket** (저지연 연속 스트림, HTTP 폴링 대비 적합).
-- ESP32 = WebSocket 서버, 모바일 웹 = 클라이언트.
+- 경로: **ESP32 → Spring 서버 → 브라우저**. ESP32 는 서버가 아니라 클라이언트다.
 - 기존 모바일 제어 채널과 동일한 Wi-Fi 연결 재사용.
+
+> 처음에는 ESP32 가 직접 WebSocket 서버가 되는 안이었으나, ESP32 부담과 동시 접속 수
+> 때문에 Spring 서버가 중계하는 구조로 바꿨다. 근거는 [server.md](./server.md) 3장.
 
 ## 4. 모바일 3D 렌더
 
@@ -49,14 +52,16 @@ Euler 각(roll/pitch/yaw)은 특정 자세에서 두 축이 겹치며 자유도�
 
 | 계층 | 구성요소 |
 |------|----------|
-| ESP32 | WebSocket 서버 (ESP Async WebServer 또는 ArduinoWebsockets) |
-| 자세 소스 | MPU6050 융합 자세(voting 통과), 쿼터니언 출력 |
-| 별도 서버 | 웹 자산(HTML/JS) 호스팅 |
+| ESP32 | WebSocket 클라이언트 (`espressif/esp_websocket_client`) |
+| 자세 소스 | 가속도 센서 융합 자세(voting 통과), 쿼터니언 출력 |
+| 별도 서버 | Spring Boot — 중계 + 웹 자산(HTML/JS) 호스팅 |
 | 모바일 웹 | Three.js 3D 렌더, WebSocket 클라이언트 |
 | 3D 모델 | `docs/frame/obj/*.obj` 재사용 |
 
 ## 7. 미결 사항
 
-- 쿼터니언 송신 주기 최종값 (실측 후 결정).
-- 별도 서버 구현 스택.
+- 쿼터니언 송신 주기 최종값 (실측 후 결정). 텔레메트리는 현재 50Hz 로 보내는 중.
 - 센서 상태 오버레이 UI 상세.
+
+서버 스택은 Spring Boot 로 정해졌고 대시보드까지 동작한다 ([server.md](./server.md)).
+남은 것은 쿼터니언 송신과 3D 렌더다.
