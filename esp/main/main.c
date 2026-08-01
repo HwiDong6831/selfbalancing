@@ -388,6 +388,11 @@ static void balance_loop(float offset, float setpoint)
         // 셋을 다 읽는다. 한 번에 약 1ms 씩 든다.
         // 실패 1회는 I2C 타임아웃 10ms 라 반드시 세어야 한다.
         for (int i = 0; i < NUM_SENSORS; i++) {
+            // 결함 주입. 실제 결함과 같은 경로를 타도록 원본 값을 덮는다.
+            float inj_rate;
+            telemetry_fault_t inj = telemetry_get_inject(MUX_CHANNELS[i], &inj_rate);
+            drift[i] = (inj == TELEMETRY_FAULT_DRIFT) ? drift[i] + inj_rate * dt : 0.0f;
+
             if (mpu6050_read_accel_gyro(MUX_CHANNELS[i],
                                         &a[i][0], &a[i][1], &a[i][2],
                                         &g[i][0], &g[i][1], &g[i][2]) != ESP_OK) {
@@ -397,14 +402,12 @@ static void balance_loop(float offset, float setpoint)
                 g[i][0] = g[i][1] = g[i][2] = 0;
             } else {
                 fault[i] = TELEMETRY_FAULT_NONE;
-                memcpy(held_a[i], a[i], sizeof a[i]);   // freeze 가 되돌려 줄 값
-                memcpy(held_g[i], g[i], sizeof g[i]);
+                // 주입 중에 갱신하면 freeze 가 매 루프 현재값을 되돌려 줘 아무 효과가 없다.
+                if (inj == TELEMETRY_FAULT_NONE) {
+                    memcpy(held_a[i], a[i], sizeof a[i]);
+                    memcpy(held_g[i], g[i], sizeof g[i]);
+                }
             }
-
-            // 결함 주입. 실제 결함과 같은 경로를 타도록 원본 값을 덮는다.
-            float inj_rate;
-            telemetry_fault_t inj = telemetry_get_inject(MUX_CHANNELS[i], &inj_rate);
-            drift[i] = (inj == TELEMETRY_FAULT_DRIFT) ? drift[i] + inj_rate * dt : 0.0f;
 
             if (inj == TELEMETRY_FAULT_DROPOUT) {
                 a[i][0] = a[i][1] = a[i][2] = 0;
