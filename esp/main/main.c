@@ -1,7 +1,7 @@
 /*
  * 3단계 — 밸런싱.
  *
- * MPU(mux 채널 0)로 기울기를 추정해 q축 전압을 만들고, 엔코더 폐루프 커뮤테이션으로
+ * MPU(MUX_CHANNELS[0])로 기울기를 추정해 q축 전압을 만들고, 엔코더 폐루프 커뮤테이션으로
  * 모터에 인가한다. 제어는 별도 태스크에서 돌고 app_main 은 로그만 찍는다.
  */
 #include <math.h>
@@ -44,7 +44,7 @@
 // 대시보드 송신 간격 (30Hz). 루프마다 보내면 WiFi 송신 전류가 센서 전원을 흔든다.
 #define TELEMETRY_US   33000
 
-#define GYRO_CAL_N     200         // gx bias 평균 샘플 수 (5ms 간격 = 1초)
+#define GYRO_CAL_N     200         // gz bias 평균 샘플 수 (5ms 간격 = 1초)
 #define SETPOINT_MS    2000        // 똑바로 세운 채 상보필터를 수렴시키는 시간
 
 #define LAG_COMP       1.0f        // 커뮤테이션 지연 보상. 1.0 = 한 루프치, 0.0 = 보상 없음
@@ -95,10 +95,8 @@ static const int MUX_CHANNELS[NUM_SENSORS] = {5, 6, 7};
 // 1초치 계측. 루프 주기가 바뀌면 "초당 몇 회" 는 비교가 안 되므로 비율로 본다.
 typedef struct {
     uint32_t loops;
-    uint32_t enc_fail;
     uint32_t mpu_fail;
     uint32_t enc_bad;       // 물리적으로 불가능해 버린 각도 변화
-    uint16_t bad_raw;       // [진단] 마지막으로 버린 값의 엔코더 원본. 0/16383/그 외를 가른다
     float    d_max;         // 최대 각도 변화 [rad]
     float    d_max_span;    // 그때 직전 채택값 이후 경과 시간 [s]
 } stats_t;
@@ -177,12 +175,12 @@ static void stats_print(const stats_msg_t *m)
     encoder_get_z(&z_n, &z_last);
 
     ESP_LOGI(TAG, "loop %luHz  각도 %6.1f도  각속도 %7.1f도/s  uq %6.2fV  "
-                  "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상버림 %lu(raw %u)  최대변화 %.1f도(%.1f배)  "
+                  "휠 %6.1f  MPU실패 %lu(%.2f%%)  손상버림 %lu  최대변화 %.1f도(%.1f배)  "
                   "카운트 %5d  Z %lu회(카운트 %d)",
              hz, m->angle, m->rate, m->uq, m->wheel_vel,
              (unsigned long)st->mpu_fail,
              reads ? 100.0f * st->mpu_fail / reads : 0.0f,
-             (unsigned long)st->enc_bad, st->bad_raw,
+             (unsigned long)st->enc_bad,
              d_max_deg, (explain > 0.01f) ? d_max_deg / explain : 0.0f,
              encoder_get_count(), (unsigned long)z_n, z_last);
 }
@@ -244,7 +242,7 @@ static float measure_gyro_bias(void)
     for (int i = 0; i < GYRO_CAL_N; i++) {
         if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az,
                                     &gx, &gy, &gz) == ESP_OK) {
-            sum += gx;
+            sum += gz;
             n++;
         }
         vTaskDelay(pdMS_TO_TICKS(5));
@@ -253,7 +251,7 @@ static float measure_gyro_bias(void)
 }
 
 // 조립 오차 때문에 "진짜 똑바로" 가 센서상 0 이 아니다. 세워 둔 채 수렴시켜 기준을 잡는다.
-static float measure_setpoint(float gx_bias)
+static float measure_setpoint(float gz_bias)
 {
     int64_t t0 = esp_timer_get_time(), prev = t0;
     float   angle = 0.0f, rate;
@@ -266,7 +264,7 @@ static float measure_setpoint(float gx_bias)
 
         if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az,
                                     &gx, &gy, &gz) == ESP_OK) {
-            angle = balance_estimate_angle(ay, az, gx, gx_bias, dt, &rate);
+            angle = balance_estimate_angle(ax, ay, gz, gz_bias, dt, &rate);
         }
         vTaskDelay(pdMS_TO_TICKS(LOOP_PERIOD_MS));
     }
@@ -300,7 +298,7 @@ static void publish_frame(const int16_t a[][3], const int16_t g[][3],
     telemetry_publish(&f);
 }
 
-static void balance_loop(float offset, float gx_bias, float setpoint)
+static void balance_loop(float offset, float gz_bias, float setpoint)
 {
     int64_t now       = esp_timer_get_time();
     int64_t prev_time = now, last_stat = now, last_pub = now;
@@ -340,55 +338,49 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
         bool ch0_ok = (fault[0] == TELEMETRY_FAULT_NONE);
 
         if (ch0_ok) {
-            tilt = balance_estimate_angle(a[0][1], a[0][2], g[0][0],
-                                          gx_bias, dt, &rate) - setpoint;
+            tilt = balance_estimate_angle(a[0][0], a[0][1], g[0][2],
+                                          gz_bias, dt, &rate) - setpoint;
             uq   = balance_torque(tilt, rate, wheel_vel);
         }
 
+        // PCNT 는 하드웨어가 세므로 읽기 실패가 없다 (I2C 시절의 실패 경로는 사라졌다).
         float angle;
+        encoder_read_angle(&angle);
         since_ok += dt;
-        if (encoder_read_angle(&angle) != ESP_OK) {
-            // 로그 금지: UART 블로킹이 커뮤테이션을 더 멈춘다.
-            // 직전 전압 벡터를 그대로 두고 보정하지 않는다.
-            st.enc_fail++;
+
+        float d = angle_delta(angle, prev_angle);
+        stats_add(&st, d, since_ok);
+
+        /*
+         * ABZ 로 옮긴 뒤로는 걸리지 않는다. 남겨두는 것은 이 값이 계속 0 이라는 것 자체가
+         * 전환이 성공했다는 증거이기 때문이다 (2026-08-02 일지).
+         *
+         * 걸리면 버리고 직전 전압 벡터를 유지한다. prev_angle 을 안 옮기므로 다음
+         * 정상값이 그대로 이어진다. 로그는 찍지 않는다 — UART 블로킹이 커뮤테이션을
+         * 더 멈춘다.
+         */
+        if (enc_implausible(d, since_ok)) {
+            st.enc_bad++;
         } else {
-            float d = angle_delta(angle, prev_angle);
-            stats_add(&st, d, since_ok);
+            // 물리적으로 가능한 가속 범위로 측정값을 깎은 뒤 필터에 넣는다.
+            float meas = d / since_ok;
+            float step = WHEEL_MAX_ACC * since_ok;
+            if (meas > wheel_vel + step) meas = wheel_vel + step;
+            if (meas < wheel_vel - step) meas = wheel_vel - step;
 
-            /*
-             * I2C 가 ESP_OK 를 줘도 값이 깨져 오는 경우가 있다. 그대로 쓰면 wheel_vel 이
-             * 한 번에 수십 rad/s 튀어 K3 가 uq 를 포화시키고, 깨진 각도로 자계를 세워
-             * 토크 방향까지 뒤집힌다 (2026-07-29 일지).
-             *
-             * 읽기 실패와 똑같이 다룬다 — 버리고 직전 전압 벡터를 유지한다.
-             * prev_angle 을 안 옮기므로 다음 정상값이 그대로 이어진다.
-             */
-            if (enc_implausible(d, since_ok)) {
-                st.enc_bad++;
-                // encoder_read_angle 의 역산. 16383 이면 엔코더 무응답, 0 이면 0 을 보낸 것.
-                st.bad_raw = (uint16_t)((2.0f * (float)M_PI - angle) *
-                                        (16384.0f / (2.0f * (float)M_PI)));
-            } else {
-                // 물리적으로 가능한 가속 범위로 측정값을 깎은 뒤 필터에 넣는다.
-                float meas = d / since_ok;
-                float step = WHEEL_MAX_ACC * since_ok;
-                if (meas > wheel_vel + step) meas = wheel_vel + step;
-                if (meas < wheel_vel - step) meas = wheel_vel - step;
+            wheel_vel  = (1.0f - VEL_LPF) * wheel_vel + VEL_LPF * meas;
+            prev_angle = angle;
+            since_ok   = 0.0f;
 
-                wheel_vel  = (1.0f - VEL_LPF) * wheel_vel + VEL_LPF * meas;
-                prev_angle = angle;
-                since_ok   = 0.0f;
+            // 읽은 위치가 아니라 다음 갱신 시점의 예상 위치에 자계를 세운다.
+            // 상한은 wheel_vel 이 튀어도 벡터가 날아가지 않게 하려는 것이다.
+            float adv     = LAG_COMP * wheel_vel * dt;
+            float adv_max = ENC_MAX_VEL * dt;
+            if (adv >  adv_max) adv =  adv_max;
+            if (adv < -adv_max) adv = -adv_max;
 
-                // 읽은 위치가 아니라 다음 갱신 시점의 예상 위치에 자계를 세운다.
-                // 상한은 wheel_vel 이 튀어도 벡터가 날아가지 않게 하려는 것이다.
-                float adv     = LAG_COMP * wheel_vel * dt;
-                float adv_max = ENC_MAX_VEL * dt;
-                if (adv >  adv_max) adv =  adv_max;
-                if (adv < -adv_max) adv = -adv_max;
-
-                // DRIVE_MOTOR 0 이면 EN 이 꺼져 있어 duty 를 써도 출력이 나가지 않는다.
-                foc_apply_torque(uq, angle + adv, offset);
-            }
+            // DRIVE_MOTOR 0 이면 EN 이 꺼져 있어 duty 를 써도 출력이 나가지 않는다.
+            foc_apply_torque(uq, angle + adv, offset);
         }
 
         if (now - last_pub >= TELEMETRY_US) {
@@ -413,10 +405,10 @@ static void balance_loop(float offset, float gx_bias, float setpoint)
 static void control_task(void *arg)
 {
     ESP_LOGI(TAG, "자이로 영점 측정 중 — 가만히 두세요");
-    float gx_bias = measure_gyro_bias();
+    float gz_bias = measure_gyro_bias();
 
-    ESP_LOGI(TAG, "영점 %.1f LSB. 똑바로 세워 잡으세요 (%d ms)", gx_bias, SETPOINT_MS);
-    float setpoint = measure_setpoint(gx_bias);
+    ESP_LOGI(TAG, "영점 %.1f LSB. 똑바로 세워 잡으세요 (%d ms)", gz_bias, SETPOINT_MS);
+    float setpoint = measure_setpoint(gz_bias);
 
 #if DRIVE_MOTOR
     float offset = align_rotor();
@@ -425,7 +417,7 @@ static void control_task(void *arg)
 #endif
 
     ESP_LOGI(TAG, "기준 각도 %.1f도, 구동 %s", setpoint, DRIVE_MOTOR ? "ON" : "OFF(계측만)");
-    balance_loop(offset, gx_bias, setpoint);
+    balance_loop(offset, gz_bias, setpoint);
 }
 
 // app_main(우선순위 1)이 그대로 로그 태스크가 된다. 제어보다 낮으므로 UART 를

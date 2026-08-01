@@ -48,17 +48,17 @@ float balance_torque(float angle, float rate, float wheel_vel)
     return clampf(uq, -UQ_LIMIT, UQ_LIMIT);
 }
 
-float balance_estimate_angle(int16_t ay, int16_t az, int16_t gx,
-                             float gx_bias, float dt, float *rate_out)
+float balance_estimate_angle(int16_t ax, int16_t ay, int16_t gz,
+                             float gz_bias, float dt, float *rate_out)
 {
     static float angle = 0.0f;
     static bool  init  = false;
 
-    // 가속도로 절대 각도 (tilt 축 X → YZ 평면), deg.
-    // -ay,-az 로 180° 이동 → 똑바로 선 자세가 ±180 경계 아닌 0 근처가 되게 함.
-    float accel_angle = atan2f(-(float)ay, -(float)az) * (180.0f / (float)M_PI);
+    // 가속도로 절대 각도 (tilt 축 Z → XY 평면), deg.
+    // 똑바로 선 자세에서 중력이 +Y 로 실려 ay≈1g, ax≈0 이므로 그대로 0 도가 나온다.
+    float accel_angle = atan2f((float)ax, (float)ay) * (180.0f / (float)M_PI);
     // 자이로 각속도 (bias 제거), deg/s
-    float rate = ((float)gx - gx_bias) / GYRO_LSB_PER_DPS;
+    float rate = ((float)gz - gz_bias) / GYRO_LSB_PER_DPS;
 
     if (!init) {            // 첫 샘플은 가속도각으로 초기화 (수렴 빠르게)
         angle = accel_angle;

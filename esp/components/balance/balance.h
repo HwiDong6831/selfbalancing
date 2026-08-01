@@ -21,18 +21,18 @@ extern "C" {
 float balance_torque(float angle, float rate, float wheel_vel);
 
 /*
- * 상보필터로 tilt 각도 추정 (자이로 gx + 가속도 ay/az 융합).
+ * 상보필터로 tilt 각도 추정 (자이로 gz + 가속도 ax/ay 융합).
  *
- * ay, az   : 가속도 raw (tilt 축은 X → YZ 평면에서 각도)
- * gx       : 자이로 raw (tilt 각속도 축)
- * gx_bias  : 정지 시 측정한 gx 평균 (offset 제거용)
+ * ax, ay   : 가속도 raw (tilt 축은 Z → XY 평면에서 각도)
+ * gz       : 자이로 raw (tilt 각속도 축)
+ * gz_bias  : 정지 시 측정한 gz 평균 (offset 제거용)
  * dt       : 루프 주기 (초)
  * rate_out : (출력) 각속도 [deg/s], NULL 허용
  *
  * 반환: 융합 각도 [deg]
  */
-float balance_estimate_angle(int16_t ay, int16_t az, int16_t gx,
-                             float gx_bias, float dt, float *rate_out);
+float balance_estimate_angle(int16_t ax, int16_t ay, int16_t gz,
+                             float gz_bias, float dt, float *rate_out);
 
 #ifdef __cplusplus
 }
