@@ -129,11 +129,8 @@ function render(frame) {
   $("enc").textContent     = fmt(frame.encoder ? frame.encoder.angle : null, 1);
 
   const v = frame.voting || {};
-  const vr = $("vote-result");
-  vr.textContent = VOTE_LABEL[v.result] || v.result || "–";
-  vr.className = "badge badge--" + (v.result === "ok" ? "ok" : v.result === "fail" ? "fail" : "warn");
-  $("vote-detail").textContent =
-    `used: [${(v.used || []).join(", ")}]　rejected: [${(v.rejected || []).join(", ")}]`;
+  renderVote("accel", v.accel);
+  renderVote("gyro", v.gyro);
 
   renderSensors(frame.sensors || []);
   push(b);
@@ -141,7 +138,18 @@ function render(frame) {
 
 // 서버 계약은 영문 코드로 오고 화면에만 우리말로 바꾼다. CSS 클래스는 코드 그대로 쓴다.
 const FAULT_LABEL = { none: "정상", dropout: "끊김", freeze: "고정", drift: "드리프트" };
-const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", fail: "실패", "n/a": "미구현" };
+const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", fail: "실패" };
+
+// 가속도·자이로 판정 한 덩이
+function renderVote(kind, v) {
+  v = v || {};
+  const badge = $(`vote-${kind}-result`);
+  badge.textContent = VOTE_LABEL[v.result] || "–";
+  badge.className = "badge badge--" +
+    (v.result === "ok" ? "ok" : v.result === "fail" ? "fail" : "warn");
+  $(`vote-${kind}-detail`).textContent =
+    `used: [${(v.used || []).join(", ")}]　rejected: [${(v.rejected || []).join(", ")}]`;
+}
 
 function renderSensors(sensors) {
   const host = $("sensors");

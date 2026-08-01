@@ -17,11 +17,14 @@ public record SensorFrame(
             String fault   // none | dropout | freeze | drift
     ) {}
 
-    public record Voting(
-            String result,          // ok | degraded | fail
-            List<Integer> used,
-            List<Integer> rejected
-    ) {}
+    /** 가속도쌍(ax,ay)과 자이로(gz)를 따로 투표한다. */
+    public record Voting(Vote accel, Vote gyro) {
+        public record Vote(
+                String result,          // ok | degraded | fail
+                List<Integer> used,
+                List<Integer> rejected
+        ) {}
+    }
 
     /** main.c 의 angle/rate/setpoint/uq 대응. */
     public record Balance(

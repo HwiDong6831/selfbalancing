@@ -29,7 +29,8 @@ public class DummyTelemetrySource {
         if (v >= 10 || v <= -10) dir = -dir;
 
         var sensors = List.of(mpu(CH[0]), mpu(CH[1]), mpu(CH[2]));
-        var voting = new SensorFrame.Voting("ok", List.of(CH[0], CH[1], CH[2]), List.of());
+        var allOk = new SensorFrame.Voting.Vote("ok", List.of(CH[0], CH[1], CH[2]), List.of());
+        var voting = new SensorFrame.Voting(allOk, allOk);
         var balance = new SensorFrame.Balance(v, v, 0.0, v);
         sink.publish(new SensorFrame(System.currentTimeMillis(),
                 sensors, voting, balance, new SensorFrame.Encoder(v)));

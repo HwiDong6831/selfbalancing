@@ -1,8 +1,9 @@
 /*
  * 3단계 — 밸런싱.
  *
- * MPU(MUX_CHANNELS[0])로 기울기를 추정해 q축 전압을 만들고, 엔코더 폐루프 커뮤테이션으로
- * 모터에 인가한다. 제어는 별도 태스크에서 돌고 app_main 은 로그만 찍는다.
+ * MPU 3개를 voting(서로 비교해 이상한 값을 골라내는 다수결)으로 융합해 기울기를 추정하고
+ * q축 전압을 만들어, 엔코더 폐루프 커뮤테이션으로 모터에 인가한다.
+ * 제어는 별도 태스크에서 돌고 app_main 은 로그만 찍는다.
  */
 #include <math.h>
 #include "freertos/FreeRTOS.h"
@@ -16,6 +17,7 @@
 #include "mpu6050.h"
 #include "foc.h"
 #include "balance.h"
+#include "voting.h"
 #include "telemetry.h"
 #include "secrets.h"
 
@@ -84,8 +86,8 @@
 
 static const char *TAG = "MAIN";
 
-// 제어에 쓰는 건 0 번뿐이다. 나머지 둘은 대시보드 표시용으로 읽는다.
-#define NUM_SENSORS    3
+// 셋을 전부 제어에 쓴다. voting 이 서로를 검증해 이상한 값을 골라낸다.
+#define NUM_SENSORS    VOTING_N
 static const int MUX_CHANNELS[NUM_SENSORS] = {5, 6, 7};
 
 // ACCEL_CONFIG / GYRO_CONFIG 를 안 건드리므로 리셋 기본값 ±2g, ±250도/s.
@@ -232,26 +234,45 @@ static float align_rotor(void)
 }
 #endif  // DRIVE_MOTOR
 
-// 정지 상태에서 재는 자이로 영점. 이 값을 빼야 적분이 드리프트하지 않는다.
-static float measure_gyro_bias(void)
+// 채널별 영점. 자이로는 평균을 통째로, 가속도는 중앙값 대비 차이만 뺀다 (2026-08-02 일지).
+static void measure_cal(float gz0[NUM_SENSORS], float a0[NUM_SENSORS][2])
 {
-    int32_t sum = 0;
-    int     n   = 0;
+    int32_t sg[NUM_SENSORS] = {0}, sa[NUM_SENSORS][2] = {{0}};
+    int     n[NUM_SENSORS]  = {0};
+    float   mean_a[NUM_SENSORS][2];
     int16_t ax, ay, az, gx, gy, gz;
 
     for (int i = 0; i < GYRO_CAL_N; i++) {
-        if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az,
-                                    &gx, &gy, &gz) == ESP_OK) {
-            sum += gz;
-            n++;
+        for (int c = 0; c < NUM_SENSORS; c++) {
+            if (mpu6050_read_accel_gyro(MUX_CHANNELS[c], &ax, &ay, &az,
+                                        &gx, &gy, &gz) == ESP_OK) {
+                sg[c]    += gz;
+                sa[c][0] += ax;
+                sa[c][1] += ay;
+                n[c]++;
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
-    return n ? (float)sum / n : 0.0f;
+
+    for (int c = 0; c < NUM_SENSORS; c++) {
+        gz0[c]       = n[c] ? (float)sg[c]    / n[c] : 0.0f;
+        mean_a[c][0] = n[c] ? (float)sa[c][0] / n[c] : 0.0f;
+        mean_a[c][1] = n[c] ? (float)sa[c][1] / n[c] : 0.0f;
+    }
+
+    // 셋뿐이라 정렬 없이 비교로 중앙값을 고른다.
+    for (int k = 0; k < 2; k++) {
+        float x = mean_a[0][k], y = mean_a[1][k], z = mean_a[2][k];
+        float med = (x < y) ? ((y < z) ? y : ((x < z) ? z : x))
+                            : ((x < z) ? x : ((y < z) ? z : y));
+        for (int c = 0; c < NUM_SENSORS; c++) a0[c][k] = mean_a[c][k] - med;
+    }
 }
 
 // 조립 오차 때문에 "진짜 똑바로" 가 센서상 0 이 아니다. 세워 둔 채 수렴시켜 기준을 잡는다.
-static float measure_setpoint(float gz_bias)
+// 제어 루프와 같은 기준을 쓰도록 여기서도 영점을 뺀다.
+static float measure_setpoint(const float a0[2], float gz0)
 {
     int64_t t0 = esp_timer_get_time(), prev = t0;
     float   angle = 0.0f, rate;
@@ -264,7 +285,8 @@ static float measure_setpoint(float gz_bias)
 
         if (mpu6050_read_accel_gyro(MUX_CHANNELS[0], &ax, &ay, &az,
                                     &gx, &gy, &gz) == ESP_OK) {
-            angle = balance_estimate_angle(ax, ay, gz, gz_bias, dt, &rate);
+            angle = balance_estimate_angle((int16_t)(ax - a0[0]), (int16_t)(ay - a0[1]),
+                                           gz, gz0, dt, &rate);
         }
         vTaskDelay(pdMS_TO_TICKS(LOOP_PERIOD_MS));
     }
@@ -274,6 +296,7 @@ static float measure_setpoint(float gz_bias)
 // 대시보드로 한 프레임 보낸다. telemetry_publish 는 논블로킹이라 제어 루프에서 불러도 된다.
 static void publish_frame(const int16_t a[][3], const int16_t g[][3],
                           const telemetry_fault_t *fault,
+                          const voting_out_t *va, const voting_out_t *vg,
                           float tilt, float rate, float setpoint,
                           float uq, float enc_rad)
 {
@@ -284,6 +307,14 @@ static void publish_frame(const int16_t a[][3], const int16_t g[][3],
         .uq        = uq,
         .enc_angle = enc_rad * (180.0f / (float)M_PI),
     };
+
+    // voting_result_t 와 telemetry_vote_t 는 같은 순서라 그대로 옮긴다.
+    f.accel.result = (telemetry_vote_t)va->result;
+    f.gyro.result  = (telemetry_vote_t)vg->result;
+    for (int i = 0; i < NUM_SENSORS; i++) {
+        f.accel.used[i] = va->used[i];
+        f.gyro.used[i]  = vg->used[i];
+    }
 
     for (int i = 0; i < NUM_SENSORS; i++) {
         f.sensors[i].ch    = MUX_CHANNELS[i];
@@ -298,7 +329,8 @@ static void publish_frame(const int16_t a[][3], const int16_t g[][3],
     telemetry_publish(&f);
 }
 
-static void balance_loop(float offset, float gz_bias, float setpoint)
+static void balance_loop(float offset, const float gz0[NUM_SENSORS],
+                         const float a0[NUM_SENSORS][2], float setpoint)
 {
     int64_t now       = esp_timer_get_time();
     int64_t prev_time = now, last_stat = now, last_pub = now;
@@ -309,6 +341,11 @@ static void balance_loop(float offset, float gz_bias, float setpoint)
     float   tilt = 0.0f, rate = 0.0f, uq = 0.0f;
     int16_t a[NUM_SENSORS][3], g[NUM_SENSORS][3];   // [채널][x,y,z]
     telemetry_fault_t fault[NUM_SENSORS] = {0};
+
+    // 영점을 뺀 비교용 값. 제어에 쓰는 축만 담는다 (가속도 ax,ay / 자이로 gz).
+    int16_t av[NUM_SENSORS][VOTING_AXIS_MAX], gv[NUM_SENSORS][VOTING_AXIS_MAX] = {{0}};
+    bool    valid[NUM_SENSORS];
+    voting_out_t va = {0}, vg = {0};
 
     encoder_read_angle(&prev_angle);
 
@@ -321,7 +358,7 @@ static void balance_loop(float offset, float gz_bias, float setpoint)
         prev_time = now;
         st.loops++;
 
-        // 제어는 채널 0 만 쓰고 나머지 둘은 대시보드용이다. 한 번에 약 1ms 씩 더 든다.
+        // 셋을 다 읽는다. 한 번에 약 1ms 씩 든다.
         // 실패 1회는 I2C 타임아웃 10ms 라 반드시 세어야 한다.
         for (int i = 0; i < NUM_SENSORS; i++) {
             if (mpu6050_read_accel_gyro(MUX_CHANNELS[i],
@@ -334,12 +371,22 @@ static void balance_loop(float offset, float gz_bias, float setpoint)
             } else {
                 fault[i] = TELEMETRY_FAULT_NONE;
             }
-        }
-        bool ch0_ok = (fault[0] == TELEMETRY_FAULT_NONE);
+            valid[i] = (fault[i] == TELEMETRY_FAULT_NONE);
 
-        if (ch0_ok) {
-            tilt = balance_estimate_angle(a[0][0], a[0][1], g[0][2],
-                                          gz_bias, dt, &rate) - setpoint;
+            av[i][0] = (int16_t)(a[i][0] - a0[i][0]);
+            av[i][1] = (int16_t)(a[i][1] - a0[i][1]);
+            gv[i][0] = (int16_t)(g[i][2] - gz0[i]);
+        }
+
+        // 가속도쌍과 자이로를 따로 투표한다 (이유는 voting.h).
+        voting_fuse(av, valid, 2, VOTING_TOL_ACC,  &va);
+        voting_fuse(gv, valid, 1, VOTING_TOL_GYRO, &vg);
+
+        // FAIL 이면 갱신하지 않고 직전 명령을 잇는다. 값 0 을 넣으면 "똑바로" 로 읽혀 넘어진다.
+        if (va.result != VOTING_FAIL && vg.result != VOTING_FAIL) {
+            // 영점은 채널별로 이미 뺐으므로 bias 는 0 이다.
+            tilt = balance_estimate_angle(va.val[0], va.val[1], vg.val[0],
+                                          0.0f, dt, &rate) - setpoint;
             uq   = balance_torque(tilt, rate, wheel_vel);
         }
 
@@ -385,7 +432,7 @@ static void balance_loop(float offset, float gz_bias, float setpoint)
 
         if (now - last_pub >= TELEMETRY_US) {
             last_pub = now;
-            publish_frame(a, g, fault, tilt, rate, setpoint, uq, prev_angle);
+            publish_frame(a, g, fault, &va, &vg, tilt, rate, setpoint, uq, prev_angle);
         }
 
         if (now - last_stat >= STAT_US) {
@@ -404,11 +451,17 @@ static void balance_loop(float offset, float gz_bias, float setpoint)
 
 static void control_task(void *arg)
 {
-    ESP_LOGI(TAG, "자이로 영점 측정 중 — 가만히 두세요");
-    float gz_bias = measure_gyro_bias();
+    ESP_LOGI(TAG, "센서 영점 측정 중 — 가만히 두세요");
+    float gz0[NUM_SENSORS], a0[NUM_SENSORS][2];
+    measure_cal(gz0, a0);
 
-    ESP_LOGI(TAG, "영점 %.1f LSB. 똑바로 세워 잡으세요 (%d ms)", gz_bias, SETPOINT_MS);
-    float setpoint = measure_setpoint(gz_bias);
+    for (int c = 0; c < NUM_SENSORS; c++) {
+        ESP_LOGI(TAG, "ch%d 영점  자이로 %7.1f  가속도 %7.1f / %7.1f LSB",
+                 MUX_CHANNELS[c], gz0[c], a0[c][0], a0[c][1]);
+    }
+
+    ESP_LOGI(TAG, "똑바로 세워 잡으세요 (%d ms)", SETPOINT_MS);
+    float setpoint = measure_setpoint(a0[0], gz0[0]);
 
 #if DRIVE_MOTOR
     float offset = align_rotor();
@@ -417,7 +470,7 @@ static void control_task(void *arg)
 #endif
 
     ESP_LOGI(TAG, "기준 각도 %.1f도, 구동 %s", setpoint, DRIVE_MOTOR ? "ON" : "OFF(계측만)");
-    balance_loop(offset, gz_bias, setpoint);
+    balance_loop(offset, gz0, a0, setpoint);
 }
 
 // app_main(우선순위 1)이 그대로 로그 태스크가 된다. 제어보다 낮으므로 UART 를

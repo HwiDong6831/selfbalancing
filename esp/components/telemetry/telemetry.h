@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -26,9 +27,23 @@ typedef struct {
     telemetry_fault_t fault;
 } telemetry_sensor_t;
 
+// voting_result_t 와 같은 순서. voting 컴포넌트에 의존하지 않으려고 따로 둔다.
+typedef enum {
+    TELEMETRY_VOTE_OK = 0,
+    TELEMETRY_VOTE_DEGRADED,
+    TELEMETRY_VOTE_FAIL,
+} telemetry_vote_t;
+
+typedef struct {
+    telemetry_vote_t result;
+    bool used[3];               // 채널별 채택 여부. 나머지가 rejected 로 나간다
+} telemetry_voting_t;
+
 // 서버의 SensorFrame record 와 1:1 대응.
 typedef struct {
     telemetry_sensor_t sensors[3];
+    telemetry_voting_t accel;   // 가속도쌍(ax,ay) 판정
+    telemetry_voting_t gyro;    // 자이로(gz) 판정
     float angle;                // [deg]
     float rate;                 // [deg/s]
     float setpoint;             // [deg]

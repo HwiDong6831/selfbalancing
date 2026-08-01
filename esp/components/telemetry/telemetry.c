@@ -143,6 +143,31 @@ static const char *fault_name(telemetry_fault_t f)
     }
 }
 
+// {"result":"ok","used":[5,6],"rejected":[7]} 한 덩이. 가속도·자이로에 각각 쓴다.
+static int vote_json(const telemetry_voting_t *v, const telemetry_sensor_t *s,
+                     char *buf, size_t n)
+{
+    static const char *name[] = { "ok", "degraded", "fail" };
+
+    int len = snprintf(buf, n, "{\"result\":\"%s\",\"used\":[", name[v->result]);
+
+    for (int i = 0, k = 0; i < 3; i++) {
+        if (!v->used[i]) continue;
+        len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
+                        "%s%d", (k++ ? "," : ""), s[i].ch);
+    }
+    len += snprintf(buf + len, (len < (int)n) ? n - len : 0, "],\"rejected\":[");
+
+    for (int i = 0, k = 0; i < 3; i++) {
+        if (v->used[i]) continue;
+        len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
+                        "%s%d", (k++ ? "," : ""), s[i].ch);
+    }
+    len += snprintf(buf + len, (len < (int)n) ? n - len : 0, "]}");
+
+    return len;
+}
+
 static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
 {
     int len = snprintf(buf, n,
@@ -159,12 +184,15 @@ static int build_json(const telemetry_frame_t *f, char *buf, size_t n)
             fin(s->gx), fin(s->gy), fin(s->gz), fault_name(s->fault));
     }
 
-    // voting 미구현. "ok" 로 두면 대시보드에 정상으로 보여 오해를 부른다.
+    len += snprintf(buf + len, (len < (int)n) ? n - len : 0, "],\"voting\":{\"accel\":");
+    len += vote_json(&f->accel, f->sensors, buf + len, (len < (int)n) ? n - len : 0);
+
+    len += snprintf(buf + len, (len < (int)n) ? n - len : 0, ",\"gyro\":");
+    len += vote_json(&f->gyro, f->sensors, buf + len, (len < (int)n) ? n - len : 0);
+
     len += snprintf(buf + len, (len < (int)n) ? n - len : 0,
-        "],\"voting\":{\"result\":\"n/a\",\"used\":[%d,%d,%d],\"rejected\":[]},"
-        "\"balance\":{\"angle\":%.2f,\"rate\":%.2f,\"setpoint\":%.2f,\"uq\":%.3f},"
+        "},\"balance\":{\"angle\":%.2f,\"rate\":%.2f,\"setpoint\":%.2f,\"uq\":%.3f},"
         "\"encoder\":{\"angle\":%.2f}}",
-        f->sensors[0].ch, f->sensors[1].ch, f->sensors[2].ch,
         fin(f->angle), fin(f->rate), fin(f->setpoint), fin(f->uq),
         fin(f->enc_angle));
 
