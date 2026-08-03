@@ -30,7 +30,7 @@ function init(el) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 
   camera.position.set(300, 210, 420);
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   el.appendChild(renderer.domElement);
 
   scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x1a1f26, 2.2));
@@ -80,7 +80,7 @@ function init(el) {
   const fit = () => {
     const w = el.clientWidth, h = el.clientHeight;
     if (!w || !h) return;
-    renderer.setSize(w, h, false);
+    renderer.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   };
