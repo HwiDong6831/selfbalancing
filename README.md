@@ -7,6 +7,7 @@
 
 가속도 센서를 3개 탑재하여, 센싱된 정보를 다수결로 결정하여 판단하도록 설계.
 
+동작 영상 : https://www.youtube.com/shorts/YMNRPPPrXEo
 
 ## 목차
 
@@ -98,7 +99,7 @@
 | 언어 | Java 21 |
 | 프레임워크 | Spring Boot 4.1.0 (webmvc + websocket) |
 | 빌드 | Gradle |
-| 프론트 | 순수 HTML/CSS/JS. 3D 뷰에만 Three.js 사용 |
+| 프론트 | HTML/CSS/JS, Three.js |
 
 
 ## 3. 라이브러리
@@ -109,8 +110,7 @@
 | FOC 모터제어 | 직접 구현 — `esp/components/foc/` |
 | 자기인코더(MT6701) | 직접 구현 — ESP32 PCNT로 ABZ 펄스 카운트, `esp/components/encoder/` |
 | 가속도센서(MPU6500) | 직접 구현 — 멀티플렉서 경유 3채널, `esp/components/mpu6050/` |
-| Voting | 직접 구현 — 호스트 테스트 포함, `esp/components/voting/` |
-| WebSocket 클라이언트 | `espressif/esp_websocket_client` (유일한 외부 의존) |
+| WebSocket 클라이언트 | `espressif/esp_websocket_client` |
 
 
 ## 4. 주요 부품
@@ -126,12 +126,13 @@ FOC 드라이버: SimpleFOC Mini
 
 모터: 2804-100KV 브러시리스
 
-상세: [docs/parts.md](./docs/parts.md)
-
 
 ## 5. 로봇 형상
 
-![로봇 형상](./docs/frame.jpg)
+<table>
+  <tr><td><img src="./docs/frame.jpg" width="420" alt="로봇 형상 — 외부"></td></tr>
+  <tr><td><img src="./docs/frame_inner.jpg" width="420" alt="로봇 형상 — 내부"></td></tr>
+</table>
 
 
 ## 6. 서버 / 대시보드
