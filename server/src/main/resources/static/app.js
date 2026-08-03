@@ -139,6 +139,7 @@ function render(frame) {
   syncFaultRows(frame.sensors || []);
   recordVote(frame);
   push(b);
+  if (window.robot3d) window.robot3d.set(b.angle, frame.encoder ? frame.encoder.angle : 0);
 }
 
 // 서버 계약은 영문 코드로 오고 화면에만 우리말로 바꾼다. CSS 클래스는 코드 그대로 쓴다.

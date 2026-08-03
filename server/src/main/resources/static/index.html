@@ -87,6 +87,12 @@
       </div>
     </details>
 
+    <!-- 3D 자세 -->
+    <details class="panel" id="view3d-panel">
+      <summary><h2>3D 자세 <span class="unit">드래그로 시점 이동 · 휠로 확대</span></h2></summary>
+      <div id="view3d" class="view3d"></div>
+    </details>
+
     <!-- 실시간 차트 -->
     <details class="panel" open>
       <summary><h2>실시간 (angle / rate / uq)</h2></summary>
@@ -112,5 +118,9 @@
   </main>
 
   <script src="app.js"></script>
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+  <script type="module" src="robot3d.js"></script>
 </body>
 </html>

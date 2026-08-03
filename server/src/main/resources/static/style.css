@@ -102,6 +102,15 @@ main {
 .vote-title:first-of-type { margin-top: 0; }
 .vote-title .log-btn { margin-left: auto; }
 
+/* 3D 자세 */
+.view3d { position: relative; height: 360px; background: #12161c; border-radius: 8px; overflow: hidden; }
+.view3d canvas { display: block; }
+.view3d-label {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: none;
+  color: #d29922; font-size: .8rem; font-weight: 600;
+  font-variant-numeric: tabular-nums; text-shadow: 0 0 4px #12161c;
+}
+
 /* 결함 주입 */
 .fi-rows { display: flex; flex-direction: column; gap: 8px; }
 .fi-row { display: flex; align-items: center; gap: 6px; }
