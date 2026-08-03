@@ -442,7 +442,7 @@ function appendLog(line) {
 
 // summary 안의 조작 요소는 눌러도 섹션이 접히지 않게 한다
 for (const el of document.querySelectorAll("summary .no-toggle")) {
-  el.onclick = (e) => e.stopPropagation();
+  el.addEventListener("click", (e) => e.stopPropagation());
 }
 
 // 차트 렌더 루프
