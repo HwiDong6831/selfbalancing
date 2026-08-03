@@ -21,7 +21,7 @@
 ## 3. 아키텍처 선택 — Spring 허브
 
 ```
-ESP32(예정) ──WS──► Spring 서버 ──WS──► 브라우저
+ESP32 ──WS──► Spring 서버 ──WS──► 브라우저
                     (중계 + 정적 호스팅)
 ```
 
@@ -66,7 +66,7 @@ public interface TelemetrySink {
 - 값은 −10~10 **삼각파** 하나(`v`)를 모든 필드에 채우는 단순 형태. *실제처럼 보일 필요가 없으므로* 사인파·노이즈·센서 스케일 흉내를 걷어내고 최소화했다.
 - `@ConditionalOnProperty(telemetry.mock.enabled)`로 켜고 끈다. **ESP32 연동 시 `false`로 두면 더미 빈이 아예 생성되지 않는다** — 코드 삭제 불필요.
 
-**mock-first 이유:** 하드웨어(무선 펌웨어 미구현) 대기 없이 서버·웹 전체 경로를 먼저 눈으로 검증하기 위해서.
+**mock-first 이유:** 무선 펌웨어가 나오기 전에 서버·웹 전체 경로를 먼저 눈으로 검증하기 위해서.
 
 ## 7. 통신 — WebSocket + 순수 fan-out
 
@@ -107,9 +107,3 @@ JAVA_HOME = <Temurin 21 경로>
 ./gradlew.bat bootRun   →   http://localhost:8080
 ```
 
-## 12. 미결 사항
-
-- ESP32 무선(STA + WS 클라이언트 + JSON 직렬화) 펌웨어.
-- 결함 시뮬레이션(dropout/freeze/drift) 주입 제어 채널 — 현재 서버는 단방향 브로드캐스트만.
-- 3D 디지털 트윈(Three.js) 탭 통합.
-- 프레임 송신 주기 최종값(실측 후 결정, 20~50Hz 범위).
