@@ -1,6 +1,6 @@
 #include "voting.h"
 
-// 두 센서가 같은 것을 보고 있는가. 축 하나라도 임계값을 넘으면 불일치다.
+// 두 센서가 같은 것을 보고 있는가.
 static bool agree(const int16_t a[VOTING_AXIS_MAX], const int16_t b[VOTING_AXIS_MAX],
                   bool valid_a, bool valid_b, int axes, int16_t tol)
 {
@@ -33,10 +33,6 @@ void voting_fuse(const int16_t v[VOTING_N][VOTING_AXIS_MAX], const bool valid[VO
         else         out->used[1] = out->used[2] = true;
         out->result = VOTING_DEGRADED;
     } else {
-        /*
-         * 짝이 0 또는 2개. 남은 하나가 유일한 데이터면 그걸 쓴다 — 값이 서로 어긋나
-         * 누가 맞는지 모르는 상황과, 읽을 게 하나뿐인 상황은 다르다.
-         */
         int only = -1, n_valid = 0;
         for (int i = 0; i < VOTING_N; i++) {
             if (valid[i]) { n_valid++; only = i; }

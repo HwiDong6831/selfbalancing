@@ -82,10 +82,7 @@ main {
 .badge--ok   { background: rgba(46,160,67,.2);  color: var(--ok);  }
 .badge--warn { background: rgba(210,153,34,.2); color: var(--warn); }
 .badge--fail { background: rgba(248,81,73,.2);  color: var(--fail); }
-/*
- * 판정 배지는 폭을 고정한다. min-width 로는 가장 긴 "일부 이상" 이 그 값을 넘어 다시
- * 늘어난다. flex 로 늘지도 줄지도 않게 못 박아야 뒤의 채널 카드가 흔들리지 않는다.
- */
+/* 판정 배지. 글자 길이가 달라도 뒤가 안 밀리도록 폭을 못 박는다 */
 .vote-title .badge { flex: 0 0 5.5rem; text-align: center; white-space: nowrap; }
 
 /* 채널 카드. 녹색 = 채택, 노란색 = 배제, 빨간색 = 검증 불가(fail) */
@@ -97,7 +94,6 @@ main {
 .ch-card--ok   { color: var(--ok);   border-color: rgba(46,160,67,.5);  background: rgba(46,160,67,.15); }
 .ch-card--warn { color: var(--warn); border-color: rgba(210,153,34,.5); background: rgba(210,153,34,.15); }
 .ch-card--fail { color: var(--fail); border-color: rgba(248,81,73,.5);  background: rgba(248,81,73,.15); }
-/* .sensor-card h3 와 특이도가 겹치지 않게 클래스로 한정 */
 .vote-title { font-size: .82rem; margin: 12px 0 4px; display: flex; align-items: center; gap: 8px; }
 .vote-title:first-of-type { margin-top: 0; }
 .vote-title .log-btn { margin-left: auto; }
@@ -105,6 +101,7 @@ main {
 /* 3D 자세 */
 .view3d { position: relative; height: 360px; background: #12161c; border-radius: 8px; overflow: hidden; }
 .view3d canvas { display: block; }
+/* 각도 라벨. 3D 좌표를 화면 좌표로 투영해 매 프레임 위치만 바꾼다 */
 .view3d-label {
   position: absolute; transform: translate(-50%, -50%); pointer-events: none;
   color: #d29922; font-size: .8rem; font-weight: 600;
@@ -121,7 +118,7 @@ main {
   border: 1px solid var(--line); border-radius: 6px;
 }
 .fi-btn:hover { color: var(--text); border-color: var(--muted); }
-/* 켜진 것이 결함이면 빨강, 정상이면 초록 — 지금 뭘 걸어 뒀는지 한눈에 보이게 */
+/* 켜진 것이 결함이면 빨강, 정상이면 초록 */
 .fi-btn.is-on { color: var(--fail); border-color: var(--fail); background: rgba(248,81,73,.15); }
 .fi-btn[data-fi-mode="none"].is-on { color: var(--ok); border-color: var(--ok); background: rgba(46,160,67,.15); }
 .fi-rate {
@@ -152,7 +149,7 @@ main {
 }
 .vh-ch:has(:checked) { color: var(--text); }
 
-/* 행이 쌓이면 패널이 끝없이 길어지므로 표만 스크롤한다. 머리 줄은 붙여 둔다. */
+/* 표만 스크롤하고 머리 줄은 붙여 둔다 */
 .vh-scroll { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 
 /* 지금 어느 신호를 보는지 표 전체가 같은 색을 띠게 한다 */

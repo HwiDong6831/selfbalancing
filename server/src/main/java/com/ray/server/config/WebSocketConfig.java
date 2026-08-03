@@ -31,7 +31,6 @@ public class WebSocketConfig implements WebSocketConfigurer {
         registry.addHandler(dashboardHandler, "/ws/telemetry")
                 .setAllowedOriginPatterns("*");
 
-        // ESP32 는 브라우저가 아니라 Origin 헤더를 보내지 않는다. 패턴 허용 필요.
         registry.addHandler(espIngestHandler, "/ws/esp")
                 .setAllowedOriginPatterns("*");
     }

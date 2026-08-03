@@ -10,12 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 
-/**
- * 테스트용 더미 데이터.
- *
- * <p>평소에는 10초 주기 대본대로 결함을 흘리고, 대시보드에서 결함을 주입하면 대본을 멈추고
- * 지시대로만 낸다. ESP 없이 브라우저에서 전 구간을 검증하기 위한 것이다.
- */
+/** 테스트용 더미 데이터. 주입이 없으면 10초 주기 대본을, 있으면 지시대로만 낸다. */
 @Component
 @ConditionalOnProperty(name = "telemetry.mock.enabled", havingValue = "true", matchIfMissing = true)
 public class DummyTelemetrySource {
@@ -57,8 +52,6 @@ public class DummyTelemetrySource {
             scripted(mode);
         }
 
-        // 배제 판단: dropout 은 즉시, drift 는 임계값을 넘은 뒤부터.
-        // freeze 는 정지 중에 정상값과 구분되지 않으므로 배제되지 않는다 — 실제와 같다.
         var dropped = new ArrayList<Integer>();
         var rejected = new ArrayList<Integer>();
         var sensors = new ArrayList<SensorFrame.Sensor>();

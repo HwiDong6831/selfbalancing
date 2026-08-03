@@ -10,32 +10,14 @@
 #define PIN_IN2         19
 #define PIN_IN3         23
 
-// PWM 설정
-//
-// 22kHz 는 가청 대역 위라 구동음이 안 들리지만, 스위칭 잡음이 I2C 통신을 깨뜨려
-// 엔코더 값이 손상되고 커뮤테이션에 타격음이 생긴다.
-// 실측 엔코더 손상률: 22k 0.29% / 15k 0.53% / 12k 0.28% / 10k 0.00%.
-// 10~12kHz 사이가 경계라 10kHz 로 둔다. 대신 가청이라 구동음이 들린다.
-// (2026-07-27 일지 참조)
-#define PWM_FREQ_HZ     10000
-#define PWM_RES         LEDC_TIMER_11_BIT       // pwm 주파수를 뽑으려면 11비트가 최대
+#define PWM_FREQ_HZ     10000                   // 스위칭 주파수 [Hz]
+#define PWM_RES         LEDC_TIMER_11_BIT
 #define DUTY_MAX        2047                    // 11비트
 #define PWM_MODE        LEDC_LOW_SPEED_MODE
 #define PWM_TIMER       LEDC_TIMER_0
 
-// 전압
-//
-// duty = u/V_SUPPLY + 0.5 로 만들므로 duty 가 0~1 을 안 벗어나려면 |u| <= V_SUPPLY/2 여야
-// 한다. 즉 uq 의 선형 상한이 5.8V 다. 넘으면 사인파 꼭대기가 잘려 토크가 맥동한다.
-// 더 필요하면 SVPWM 으로 약 15% 더 뽑을 수 있다.
-#define V_SUPPLY        11.6f                   // VM 실측
-#define POLE_PAIRS      7                       // 2804 모터 (임시)
-
-
-// PID
-#define PID_KP          1.0f                    // 오차 반영 계수
-#define PID_KI          0.0f                    // 
-#define PID_KD          0.0f                    // 
+#define V_SUPPLY        11.6f                   // 공급 전압 [V]
+#define POLE_PAIRS      7                       // 극쌍 수
 
 static const int ch_gpio[3] = {PIN_IN1, PIN_IN2, PIN_IN3};
 
@@ -47,7 +29,7 @@ static float clampf(float x, float lo, float hi)
     return x;
 }
 
-// 전기각을 라디안으로 변환
+// 각도를 0 ~ 2π 로 접는다.
 static float normalize_angle(float a)
 {
     a = fmodf(a, 2.0f * (float)M_PI);
@@ -57,17 +39,15 @@ static float normalize_angle(float a)
 
 void foc_init(void)
 {
-    // esp32의 EN 핀(IO5) 설정
     gpio_config_t foc_cfg = {
         .pin_bit_mask = 1ULL << PIN_EN,
         .mode = GPIO_MODE_OUTPUT
     };
     ESP_ERROR_CHECK(gpio_config(&foc_cfg));
-    ESP_ERROR_CHECK(gpio_set_level(PIN_EN, 0)); // PWM 설정이 완료되기 전까지 꺼둠(모터 오작동 방지)
-    
+    ESP_ERROR_CHECK(gpio_set_level(PIN_EN, 0));
+
     ESP_LOGI("FOC", "EN핀 설정 완료");
 
-    // LEDC 타이머 설정
     ledc_timer_config_t ledc_cfg = {
         .speed_mode = PWM_MODE,
         .duty_resolution = PWM_RES,
@@ -79,7 +59,6 @@ void foc_init(void)
     ESP_LOGI("FOC", "LEDC 타이머 설정 완료");
 
 
-    // 3상 채널 등록
     for(int i = 0; i<3; i++){
         ledc_channel_config_t ch_cfg = {
             .gpio_num = ch_gpio[i],
@@ -112,14 +91,11 @@ void foc_enable(bool on)
 
 float foc_align(float angle_fwd, float angle_rev)
 {
-    // d축 정렬 시 회전자 전기각 0°. angle_el = PP·(now_angle - align_angle) 되도록 음수 offset.
-    // 양 끝 모두 전기각 0 지점이라 같은 식이 성립한다.
     float a = -angle_fwd * POLE_PAIRS;
     float b = -angle_rev * POLE_PAIRS;
 
-    // 2π 경계를 넘어도 되도록 단위벡터로 평균낸다.
     float off  = atan2f(sinf(a) + sinf(b), cosf(a) + cosf(b));
-    float diff = atan2f(sinf(a - b), cosf(a - b));   // 정렬 편향의 2배. 스윕 검증용
+    float diff = atan2f(sinf(a - b), cosf(a - b));
 
     ESP_LOGI("FOC", "정렬 오프셋 %.1f도 (정방향/역방향 편차 %.1f도)",
              off * 180.0f / (float)M_PI, diff * 180.0f / (float)M_PI);
@@ -136,13 +112,12 @@ void foc_set_phase_voltage(float ud, float uq, float angle_el)
     float u_alpha = c * ud - s * uq;
     float u_beta  = s * ud + c * uq;
 
-    // 역 Clarke: (α,β) → 3상 (0.866025 = √3/2)
+    // 역 Clarke: (α,β) → 3상
     float u[3];
     u[0] = u_alpha;
     u[1] = -0.5f * u_alpha + 0.866025f * u_beta;
     u[2] = -0.5f * u_alpha - 0.866025f * u_beta;
 
-    // 전압 → duty (V_SUPPLY로 정규화 + 0.5 중심 시프트 + 클램프) 후 출력
     for (int i = 0; i < 3; i++) {
         float dc = clampf(u[i] / V_SUPPLY + 0.5f, 0.0f, 1.0f);
         ledc_set_duty(PWM_MODE, LEDC_CHANNEL_0 + i, (uint32_t)(dc * DUTY_MAX));
@@ -150,59 +125,10 @@ void foc_set_phase_voltage(float ud, float uq, float angle_el)
     }
 }
 
-float foc_openloop_velocity(float target_vel, float dt)
-{
-    // 전기각을 함수 밖에서도 유지해야 하므로 static 변수 사용
-    static float angle_el = 0.0f;
-
-    // 축속도 → 전기각 적분 (축 1바퀴 = 전기각 POLE_PAIRS 바퀴)
-    angle_el = normalize_angle(angle_el + target_vel * POLE_PAIRS * dt);
-
-    // ud=0, uq=2V
-    foc_set_phase_voltage(0.0f, 2.0f, angle_el);
-
-    return angle_el;
-}
-
-// [보존] 클로즈루프 속도 제어. 토크모드(foc_apply_torque)로 대체되어 미사용.
-#if 0
-float foc_closeloop_velocity(float target_vel, float dt, float prev_angle, float now_angle, float angle_offset){
-    // P
-    // 각도 차이 계산(가까운쪽으로)
-    float diff = fmodf(now_angle-prev_angle + (float)M_PI, 2.0f * M_PI);
-    if(diff < 0.0f) diff += 2.0f * M_PI;
-    diff -= (float)M_PI;
-
-    float angle_vel =  diff / dt; 
-    float error = target_vel - angle_vel;
-
-    // I
-    static float integral = 0.0f;
-    integral += error * dt;
-
-    // D
-    static float prev_error = 0.0f;
-    float derivative = (error - prev_error) / dt;
-    prev_error = error;
-
-    // 각 상황에 의도한 전압이 산출되도록 매크로 상수 조정 필요
-    float uq = (PID_KP * error) + (PID_KI * integral) + (PID_KD * derivative);
-    uq = clampf(uq, -V_SUPPLY, V_SUPPLY);
-
-    // 현재 전기각 계산
-    float angle_el = normalize_angle(now_angle * POLE_PAIRS + angle_offset);
-    // 현재 전기각에 uq 전압 인가
-    foc_set_phase_voltage(0.0f, uq, angle_el);
-    // ESP_LOGI("FOC", "uq: %3.1f    angle_el: %6.1f", uq, angle_el);
-
-    return angle_vel;
-}
-#endif
-
-// 토크 인가: uq 를 현재 전기각에 직접 인가 (속도 PID 없음).
+// 토크 인가: uq 를 현재 전기각에 직접 인가.
 void foc_apply_torque(float uq, float now_angle, float angle_offset)
 {
-    uq = clampf(uq, -V_SUPPLY, V_SUPPLY);       // 하드 안전 클램프
+    uq = clampf(uq, -V_SUPPLY, V_SUPPLY);
     float angle_el = normalize_angle(now_angle * POLE_PAIRS + angle_offset);
     foc_set_phase_voltage(0.0f, uq, angle_el);
 }

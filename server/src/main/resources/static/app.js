@@ -9,12 +9,7 @@ function wsUrl() {
   return `${proto}://${location.host}/ws/telemetry`;
 }
 
-/*
- * 연결은 두 개다.  브라우저 ──(/ws/telemetry)── 서버 ──(/ws/esp)── ESP32
- * 소켓만 보면 ESP 가 빠져도 "연결됨" 으로 남으므로 수신 여부를 같이 본다.
- * 로그도 ESP 에서 오니 생존 신호로 센다 (부팅 직후 6초는 로그만 오고 프레임이 없다).
- */
-const ALIVE_TIMEOUT_MS = 1000;
+const ALIVE_TIMEOUT_MS = 1000;   // 이 시간 넘게 수신이 없으면 ESP 가 끊긴 것으로 본다
 let sockOpen = false;
 let lastRxAt = 0;
 
@@ -28,7 +23,6 @@ function connect() {
     try { msg = JSON.parse(ev.data); } catch { return; }
     lastRxAt = Date.now();
     updateConn();
-    // 프레임과 시리얼 로그가 같은 소켓으로 온다
     if (typeof msg.log === "string") appendLog(msg.log);
     else render(msg);
   };
@@ -47,7 +41,6 @@ function updateConn() {
   connEl.className = "conn conn--" + cls;
 }
 
-// 수신이 끊긴 것은 이벤트가 아니라 시간 경과로만 알 수 있다
 setInterval(updateConn, 250);
 
 // 차트: angle/rate/uq 링버퍼
@@ -72,7 +65,7 @@ function push(b) {
 function drawChart() {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
-  if (!w || !h) return;   // 패널이 접혀 있으면 크기가 0 이다. 그리지 않는다
+  if (!w || !h) return;
 
   if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
     canvas.width = w * dpr; canvas.height = h * dpr;
@@ -80,7 +73,6 @@ function drawChart() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  // 세 시리즈 절대 최대값 기준 대칭 스케일
   let max = 1;
   for (const s of SERIES) for (const v of buf[s.key]) max = Math.max(max, Math.abs(v));
   max *= 1.15;
@@ -111,14 +103,14 @@ function drawChart() {
 
 const $ = (id) => document.getElementById(id);
 
-// 부호 자리 고정용: 음수는 U+2212, 양수는 U+2007(figure space) — 둘 다 숫자 1개 폭
+// 부호 자리 고정용 문자. 둘 다 숫자 한 칸 폭이다 (U+2212, U+2007)
 const MINUS = "−";
 const FIGSP = " ";
 function fmt(v, d = 2) {
   const n = Number(v);
   if (v == null || Number.isNaN(n)) return "–";
   const mag = Math.abs(n).toFixed(d);
-  const neg = n < 0 && parseFloat(mag) !== 0;   // -0.x → 0 이면 부호 제거
+  const neg = n < 0 && parseFloat(mag) !== 0;
   return (neg ? MINUS : FIGSP) + mag;
 }
 
@@ -142,11 +134,11 @@ function render(frame) {
   if (window.robot3d) window.robot3d.set(b.angle, frame.encoder ? frame.encoder.angle : 0);
 }
 
-// 서버 계약은 영문 코드로 오고 화면에만 우리말로 바꾼다. CSS 클래스는 코드 그대로 쓴다.
+// 영문 코드 → 화면 표기. CSS 클래스는 코드 그대로 쓴다.
 const FAULT_LABEL = { none: "정상", dropout: "끊김", freeze: "고정", drift: "드리프트" };
 const VOTE_LABEL  = { ok: "정상", degraded: "일부 이상", single: "단일 센서", fail: "실패" };
 
-// 가속도·자이로 판정 한 덩이. 채널마다 카드 하나로 채택 여부를 색으로 보인다.
+// 판정 한 덩이를 배지와 채널 카드로 그린다.
 function renderVote(kind, v, chans) {
   v = v || {};
   const badge = $(`vote-${kind}-result`);
@@ -155,12 +147,11 @@ function renderVote(kind, v, chans) {
     (v.result === "ok" ? "ok" : v.result === "fail" ? "fail" : "warn");
 
   const host = $(`vote-${kind}-chs`);
-  while (host.childElementCount < chans.length) {   // 카드 부족하면 생성
+  while (host.childElementCount < chans.length) {
     host.appendChild(document.createElement("span"));
   }
   const used = v.used || [];
   chans.forEach((ch, i) => {
-    // fail 은 채택이 없으므로 전부 빨강이 된다
     const cls = v.result === "fail" ? "fail" : used.includes(ch) ? "ok" : "warn";
     const el = host.children[i];
     el.className = "ch-card ch-card--" + cls;
@@ -169,20 +160,15 @@ function renderVote(kind, v, chans) {
   });
 }
 
-/*
- * 이상 이력. 판정과 배제 채널이 바뀌는 순간에만 행을 만들고, 같은 상태가 이어지는 동안은
- * 그 행의 지속 칸만 갱신한다. 50Hz 로 매 프레임 남기면 못 보고, 전이만 남기면 한 번 튄
- * 것과 계속 고장난 것을 구분할 수 없다.
- */
-const VH_CAP = 200;
+// 이상 이력. 같은 상태가 이어지는 동안은 한 행으로 묶고 지속 시간만 갱신한다.
+const VH_CAP = 200;          // 표에 쌓아 두는 최대 행 수
 const VH_SIG = {
   accel: { unit: "g",   digits: 4, axes: ["ax", "ay"] },
   gyro:  { unit: "°/s", digits: 2, axes: ["gz"] },
 };
 const vh = { accel: { key: "ok" }, gyro: { key: "ok" } };
 
-// 채널 필터. 배제 채널 중 하나라도 켜져 있으면 그 행을 보여준다.
-const vhChs = new Set();
+const vhChs = new Set();     // 채널 필터. 비어 있으면 전부 보여준다
 
 $("vh-clear").onclick = () => {
   for (const sig of ["accel", "gyro"]) {
@@ -220,7 +206,7 @@ function applyFilter() {
   updateEmpty();
 }
 
-// 채널 번호는 펌웨어가 정하므로 프레임을 보고 처음 나타난 채널부터 만든다.
+// 프레임에 실려 온 채널로 필터 체크박스를 만든다.
 function syncChannelFilter(sensors) {
   const host = $("vh-chs");
   for (const s of sensors) {
@@ -260,7 +246,7 @@ function track(sig, vote, sensors) {
   const result = (vote && vote.result) || "ok";
   const rejected = (vote && vote.rejected) || [];
 
-  // 배제 채널이 바뀌면 판정이 같아도 다른 사건이다
+  // 같은 사건인지 가리는 열쇠. 배제 채널이 바뀌면 판정이 같아도 다른 사건이다.
   const key = result === "ok" ? "ok" : result + ":" + rejected.join(",");
   if (key === st.key) {
     if (result !== "ok") {
@@ -284,7 +270,6 @@ const duration = (st) =>
 function addRow(sig, result, vote, rejected, sensors, st) {
   const { unit, digits, axes } = VH_SIG[sig];
 
-  // degraded 는 항상 1개만 배제한다. fail 은 채택이 없어 비교할 정상값이 없다.
   const bad = rejected.length === 1 ? sensors.find((s) => s.ch === rejected[0]) : null;
   let badTxt = "–", okTxt = "–", gapTxt = "–";
   if (bad) {
@@ -324,10 +309,7 @@ function addRow(sig, result, vote, rejected, sensors, st) {
   while (body.childElementCount > VH_CAP) body.removeChild(body.lastChild);
 }
 
-/*
- * 결함 주입. 브라우저 → 서버 → ESP32 로 내려간다.
- * 채널 목록은 프레임에 실려 오는 것으로 만든다 (펌웨어 5/6/7, 더미 0/1/6).
- */
+// 결함 주입. 브라우저 → 서버 → ESP32 로 내려간다.
 const FI_MODES = [
   ["none",    "정상"],
   ["dropout", "누락"],
@@ -380,7 +362,6 @@ function syncFaultRows(sensors) {
     rate.step = "0.1";
     rate.min = "0";
     rate.title = "점진적 변형 속도 — 초당 임계값의 몇 배";
-    // 속도만 바꿔도 이미 걸려 있는 drift 에 바로 반영되게 다시 보낸다
     rate.onchange = () => {
       if (fiMode.get(s.ch) === "drift") sendFault(s.ch, "drift");
     };
@@ -392,7 +373,7 @@ function syncFaultRows(sensors) {
 
 function renderSensors(sensors) {
   const host = $("sensors");
-  while (host.children.length < sensors.length) {   // 카드 부족하면 생성
+  while (host.children.length < sensors.length) {
     const card = document.createElement("div");
     card.className = "sensor-card";
     card.innerHTML =
@@ -412,10 +393,8 @@ function renderSensors(sensors) {
     const code = s.fault || "none";
     f.textContent = FAULT_LABEL[code] || code;
     f.className = "fault fault--" + code;
-    // 가속도는 g(±2), 각속도는 deg/s(±250) 라 유효자리가 다르다.
     for (const k of ["ax", "ay", "az"]) c.querySelector("." + k).textContent = fmt(s[k], 3);
     for (const k of ["gx", "gy", "gz"]) c.querySelector("." + k).textContent = fmt(s[k], 1);
-    // 위 값에서 이미 뺀 영점. 셋이 크게 다르면 임계값을 다시 봐야 한다는 신호다.
     c.querySelector(".zero").textContent =
       `영점  ax ${fmt(s.ax0, 4)}  ay ${fmt(s.ay0, 4)}  gz ${fmt(s.gz0, 2)}`;
   });
@@ -429,7 +408,7 @@ const followEl = $("log-follow");
 $("log-clear").onclick = () => { logEl.textContent = ""; };
 
 function appendLog(line) {
-  // ESP-IDF 형식 "I (1234) TAG: 본문" 의 첫 글자가 레벨
+  // ESP-IDF 형식 "I (1234) TAG: 본문" 에서 첫 글자가 레벨이다
   const lv = /^[IWED] \(/.test(line) ? line[0] : "";
   const row = document.createElement("div");
   if (lv) row.className = "lv-" + lv;
@@ -440,7 +419,7 @@ function appendLog(line) {
   if (followEl.checked) logEl.scrollTop = logEl.scrollHeight;
 }
 
-// summary 안의 조작 요소는 눌러도 섹션이 접히지 않게 한다
+// summary 안의 조작 요소는 눌러도 섹션이 접히지 않게 한다.
 for (const el of document.querySelectorAll("summary .no-toggle")) {
   el.addEventListener("click", (e) => e.stopPropagation());
 }

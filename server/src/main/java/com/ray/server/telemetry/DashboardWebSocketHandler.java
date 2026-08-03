@@ -89,7 +89,6 @@ public class DashboardWebSocketHandler extends TextWebSocketHandler implements T
                 continue;
             }
             try {
-                // WebSocketSession 은 동시 send 에 안전하지 않으므로 세션 단위 락
                 synchronized (session) {
                     session.sendMessage(msg);
                 }

@@ -13,13 +13,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * 브라우저 → ESP32 역방향 경로의 중개.
- *
- * <p>대시보드 핸들러가 ESP 핸들러를 직접 참조하면 서로 물린다(ESP 쪽이 이미
- * {@link TelemetrySink} = 대시보드에 의존). 세션을 이 빈이 들고 양쪽이 여기만 보게 해서
- * 순환을 끊는다 — {@code TelemetrySink} 와 같은 seam 방식이다.
- */
+/** 브라우저 → ESP32 역방향 경로의 중개. 양쪽 핸들러가 이 빈만 보게 해 순환 참조를 끊는다. */
 @Component
 public class CommandRelay {
 
@@ -56,7 +50,6 @@ public class CommandRelay {
             return;
         }
         try {
-            // WebSocketSession 은 동시 send 에 안전하지 않으므로 세션 단위 락
             synchronized (session) {
                 session.sendMessage(new TextMessage(mapper.writeValueAsString(cmd)));
             }
